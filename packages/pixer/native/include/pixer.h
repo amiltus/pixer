@@ -239,6 +239,21 @@ ImageErrorCode pixer_get_metadata(const struct ImageHandle *handle,
                                   struct ImageMetadata *out_metadata);
 
 /**
+ * Read image metadata from a file path without decoding pixel data.
+ */
+ImageErrorCode pixer_read_metadata_from_file_with_error(const char *path,
+                                                        struct ImageMetadata *out_metadata,
+                                                        ImageErrorCode *out_error);
+
+/**
+ * Read image metadata from memory without decoding pixel data.
+ */
+ImageErrorCode pixer_read_metadata_from_memory_with_error(const uint8_t *data,
+                                                          uintptr_t len,
+                                                          struct ImageMetadata *out_metadata,
+                                                          ImageErrorCode *out_error);
+
+/**
  * Resize the image to fit *within* `width` x `height` while preserving
  * aspect ratio.
  *

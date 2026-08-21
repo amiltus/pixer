@@ -1,8 +1,10 @@
 use image::{
-    DynamicImage, ImageError, ImageFormat, codecs::jpeg::JpegEncoder, imageops::FilterType,
+    DynamicImage, ImageError, ImageFormat, ImageReader, codecs::jpeg::JpegEncoder,
+    imageops::FilterType,
 };
 use std::{
     ffi::{CStr, CString},
+    io::Cursor,
     os::raw::c_char,
     path::Path,
     slice,
@@ -11,6 +13,7 @@ use std::{
 /// Error code returned through `out_error` pointers and as the result of
 /// operations that don't return a handle.
 #[allow(dead_code)]
+#[derive(Clone, Copy)]
 #[repr(u32)]
 pub enum ImageErrorCode {
     /// The operation succeeded.
@@ -37,6 +40,7 @@ pub enum ImageErrorCode {
 
 /// Image container format used for both decoding and encoding.
 #[allow(dead_code)]
+#[derive(Clone, Copy)]
 #[repr(u32)]
 pub enum ImageFormatEnum {
     /// Portable Network Graphics — lossless, alpha supported.
@@ -75,6 +79,7 @@ impl ImageFormatEnum {
 /// Quality and cost roughly increase from top to bottom; `Lanczos3` is the
 /// default and produces the sharpest results, `Nearest` is the fastest.
 #[allow(dead_code)]
+#[derive(Clone, Copy)]
 #[repr(u32)]
 pub enum FilterTypeEnum {
     /// Nearest-neighbour. Fastest, blocky output. Good for pixel art.
@@ -179,6 +184,23 @@ fn get_metadata(img: &DynamicImage) -> ImageMetadata {
         height: img.height(),
         color_type,
     }
+}
+
+fn read_metadata_from_reader<R: std::io::BufRead + std::io::Seek>(
+    reader: ImageReader<R>,
+) -> Result<ImageMetadata, ImageErrorCode> {
+    let reader = reader.with_guessed_format().map_err(|_| ImageErrorCode::IoError)?;
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|e| error_to_code(&e))?;
+    Ok(ImageMetadata {
+        width,
+        height,
+        // Header-only dimensions are available without decoding pixels. The
+        // image crate does not expose a generic header-only color type here, so
+        // keep this conservative for callers that estimate decoded memory.
+        color_type: 3,
+    })
 }
 
 fn write_to_jpeg_with_quality(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, ImageError> {
@@ -347,6 +369,69 @@ pub extern "C" fn pixer_load_from_memory_with_format_and_error(
         Err(e) => {
             set_error(out_error, error_to_code(&e));
             std::ptr::null_mut()
+        }
+    }
+}
+
+/// Read image metadata from a file path without decoding pixel data
+#[unsafe(no_mangle)]
+pub extern "C" fn pixer_read_metadata_from_file_with_error(
+    path: *const c_char,
+    out_metadata: *mut ImageMetadata,
+    out_error: *mut ImageErrorCode,
+) -> ImageErrorCode {
+    if path.is_null() || out_metadata.is_null() {
+        set_error(out_error, ImageErrorCode::InvalidPointer);
+        return ImageErrorCode::InvalidPointer;
+    }
+
+    let result = cstr_to_str(path).and_then(|p| {
+        ImageReader::open(Path::new(&p))
+            .map_err(|_| ImageErrorCode::IoError)
+            .and_then(read_metadata_from_reader)
+    });
+
+    match result {
+        Ok(metadata) => {
+            unsafe {
+                *out_metadata = metadata;
+            }
+            set_error(out_error, ImageErrorCode::Success);
+            ImageErrorCode::Success
+        }
+        Err(code) => {
+            set_error(out_error, code);
+            code
+        }
+    }
+}
+
+/// Read image metadata from memory without decoding pixel data
+#[unsafe(no_mangle)]
+pub extern "C" fn pixer_read_metadata_from_memory_with_error(
+    data: *const u8,
+    len: usize,
+    out_metadata: *mut ImageMetadata,
+    out_error: *mut ImageErrorCode,
+) -> ImageErrorCode {
+    if data.is_null() || len == 0 || out_metadata.is_null() {
+        set_error(out_error, ImageErrorCode::InvalidPointer);
+        return ImageErrorCode::InvalidPointer;
+    }
+
+    let buffer = unsafe { slice::from_raw_parts(data, len) };
+    let cursor = Cursor::new(buffer);
+    match read_metadata_from_reader(ImageReader::new(cursor)) {
+        Ok(metadata) => {
+            unsafe {
+                *out_metadata = metadata;
+            }
+            set_error(out_error, ImageErrorCode::Success);
+            ImageErrorCode::Success
+        }
+        Err(code) => {
+            set_error(out_error, code);
+            code
         }
     }
 }

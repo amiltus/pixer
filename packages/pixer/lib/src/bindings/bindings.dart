@@ -13,7 +13,8 @@ import 'dart:ffi' as ffi;
 external void pixer_free_string(ffi.Pointer<ffi.Char> ptr);
 
 /// Free image data buffer
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr)>(isLeaf: true)
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr)>(
+    isLeaf: true)
 external void pixer_free_buffer(ffi.Pointer<ffi.Uint8> ptr, int len);
 
 /// Free an image handle
@@ -26,13 +27,15 @@ external void pixer_free(ffi.Pointer<ImageHandle> handle);
 external ffi.Pointer<ImageHandle> pixer_load(ffi.Pointer<ffi.Char> path);
 
 /// Load an image from memory buffer
-@ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr)>()
-external ffi.Pointer<ImageHandle> pixer_load_from_memory(ffi.Pointer<ffi.Uint8> data, int len);
+@ffi.Native<
+    ffi.Pointer<ImageHandle> Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr)>()
+external ffi.Pointer<ImageHandle> pixer_load_from_memory(
+    ffi.Pointer<ffi.Uint8> data, int len);
 
 /// Load an image from memory with specific format
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr, ImageFormatEnum$1)
->()
+    ffi.Pointer<ImageHandle> Function(
+        ffi.Pointer<ffi.Uint8>, ffi.UintPtr, ImageFormatEnum$1)>()
 external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_format(
   ffi.Pointer<ffi.Uint8> data,
   int len,
@@ -41,8 +44,8 @@ external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_format(
 
 /// Load an image from a file path with error code output
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(ffi.Pointer<ffi.Char>, ffi.Pointer<ImageErrorCode$1>)
->()
+    ffi.Pointer<ImageHandle> Function(
+        ffi.Pointer<ffi.Char>, ffi.Pointer<ImageErrorCode$1>)>()
 external ffi.Pointer<ImageHandle> pixer_load_with_error(
   ffi.Pointer<ffi.Char> path,
   ffi.Pointer<ImageErrorCode$1> out_error,
@@ -50,12 +53,11 @@ external ffi.Pointer<ImageHandle> pixer_load_with_error(
 
 /// Load an image from memory buffer with error code output
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(
-    ffi.Pointer<ffi.Uint8>,
-    ffi.UintPtr,
-    ffi.Pointer<ImageErrorCode$1>,
-  )
->()
+    ffi.Pointer<ImageHandle> Function(
+      ffi.Pointer<ffi.Uint8>,
+      ffi.UintPtr,
+      ffi.Pointer<ImageErrorCode$1>,
+    )>()
 external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_error(
   ffi.Pointer<ffi.Uint8> data,
   int len,
@@ -64,13 +66,12 @@ external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_error(
 
 /// Load an image from memory with specific format and error code output
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(
-    ffi.Pointer<ffi.Uint8>,
-    ffi.UintPtr,
-    ImageFormatEnum$1,
-    ffi.Pointer<ImageErrorCode$1>,
-  )
->()
+    ffi.Pointer<ImageHandle> Function(
+      ffi.Pointer<ffi.Uint8>,
+      ffi.UintPtr,
+      ImageFormatEnum$1,
+      ffi.Pointer<ImageErrorCode$1>,
+    )>()
 external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_format_and_error(
   ffi.Pointer<ffi.Uint8> data,
   int len,
@@ -79,19 +80,21 @@ external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_format_and_error(
 );
 
 /// Save an image to a file path
-@ffi.Native<ImageErrorCode$1 Function(ffi.Pointer<ImageHandle>, ffi.Pointer<ffi.Char>)>()
-external int pixer_save(ffi.Pointer<ImageHandle> handle, ffi.Pointer<ffi.Char> path);
+@ffi.Native<
+    ImageErrorCode$1 Function(
+        ffi.Pointer<ImageHandle>, ffi.Pointer<ffi.Char>)>()
+external int pixer_save(
+    ffi.Pointer<ImageHandle> handle, ffi.Pointer<ffi.Char> path);
 
 /// Write an image to a buffer in the specified format
 /// Caller must free the buffer using pixer_free_buffer
 @ffi.Native<
-  ImageErrorCode$1 Function(
-    ffi.Pointer<ImageHandle>,
-    ImageFormatEnum$1,
-    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-    ffi.Pointer<ffi.UintPtr>,
-  )
->()
+    ImageErrorCode$1 Function(
+      ffi.Pointer<ImageHandle>,
+      ImageFormatEnum$1,
+      ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+      ffi.Pointer<ffi.UintPtr>,
+    )>()
 external int pixer_write_to(
   ffi.Pointer<ImageHandle> handle,
   int format,
@@ -105,14 +108,13 @@ external int pixer_write_to(
 /// `pixer_write_to` for other formats. Caller must free the buffer using
 /// `pixer_free_buffer`.
 @ffi.Native<
-  ImageErrorCode$1 Function(
-    ffi.Pointer<ImageHandle>,
-    ImageFormatEnum$1,
-    ffi.Uint8,
-    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-    ffi.Pointer<ffi.UintPtr>,
-  )
->()
+    ImageErrorCode$1 Function(
+      ffi.Pointer<ImageHandle>,
+      ImageFormatEnum$1,
+      ffi.Uint8,
+      ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+      ffi.Pointer<ffi.UintPtr>,
+    )>()
 external int pixer_write_to_with_quality(
   ffi.Pointer<ImageHandle> handle,
   int format,
@@ -122,12 +124,42 @@ external int pixer_write_to_with_quality(
 );
 
 /// Get image metadata
-@ffi.Native<ImageErrorCode$1 Function(ffi.Pointer<ImageHandle>, ffi.Pointer<ImageMetadata>)>(
+@ffi.Native<
+    ImageErrorCode$1 Function(
+        ffi.Pointer<ImageHandle>, ffi.Pointer<ImageMetadata>)>(
   isLeaf: true,
 )
 external int pixer_get_metadata(
   ffi.Pointer<ImageHandle> handle,
   ffi.Pointer<ImageMetadata> out_metadata,
+);
+
+/// Read image metadata from a file path without decoding pixel data.
+@ffi.Native<
+    ImageErrorCode$1 Function(
+      ffi.Pointer<ffi.Char>,
+      ffi.Pointer<ImageMetadata>,
+      ffi.Pointer<ImageErrorCode$1>,
+    )>(isLeaf: true)
+external int pixer_read_metadata_from_file_with_error(
+  ffi.Pointer<ffi.Char> path,
+  ffi.Pointer<ImageMetadata> out_metadata,
+  ffi.Pointer<ImageErrorCode$1> out_error,
+);
+
+/// Read image metadata from memory without decoding pixel data.
+@ffi.Native<
+    ImageErrorCode$1 Function(
+      ffi.Pointer<ffi.Uint8>,
+      ffi.UintPtr,
+      ffi.Pointer<ImageMetadata>,
+      ffi.Pointer<ImageErrorCode$1>,
+    )>(isLeaf: true)
+external int pixer_read_metadata_from_memory_with_error(
+  ffi.Pointer<ffi.Uint8> data,
+  int len,
+  ffi.Pointer<ImageMetadata> out_metadata,
+  ffi.Pointer<ImageErrorCode$1> out_error,
 );
 
 /// Resize the image to fit *within* `width` x `height` while preserving
@@ -137,13 +169,12 @@ external int pixer_get_metadata(
 /// proportionally so the image is never distorted. Use `pixer_resize_exact`
 /// to force exact dimensions.
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(
-    ffi.Pointer<ImageHandle>,
-    ffi.Uint32,
-    ffi.Uint32,
-    FilterTypeEnum$1,
-  )
->()
+    ffi.Pointer<ImageHandle> Function(
+      ffi.Pointer<ImageHandle>,
+      ffi.Uint32,
+      ffi.Uint32,
+      FilterTypeEnum$1,
+    )>()
 external ffi.Pointer<ImageHandle> pixer_resize(
   ffi.Pointer<ImageHandle> handle,
   int width,
@@ -155,13 +186,12 @@ external ffi.Pointer<ImageHandle> pixer_resize(
 ///
 /// May visibly stretch or squash the image.
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(
-    ffi.Pointer<ImageHandle>,
-    ffi.Uint32,
-    ffi.Uint32,
-    FilterTypeEnum$1,
-  )
->()
+    ffi.Pointer<ImageHandle> Function(
+      ffi.Pointer<ImageHandle>,
+      ffi.Uint32,
+      ffi.Uint32,
+      FilterTypeEnum$1,
+    )>()
 external ffi.Pointer<ImageHandle> pixer_resize_exact(
   ffi.Pointer<ImageHandle> handle,
   int width,
@@ -171,14 +201,13 @@ external ffi.Pointer<ImageHandle> pixer_resize_exact(
 
 /// Crop an image (immutable)
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(
-    ffi.Pointer<ImageHandle>,
-    ffi.Uint32,
-    ffi.Uint32,
-    ffi.Uint32,
-    ffi.Uint32,
-  )
->()
+    ffi.Pointer<ImageHandle> Function(
+      ffi.Pointer<ImageHandle>,
+      ffi.Uint32,
+      ffi.Uint32,
+      ffi.Uint32,
+      ffi.Uint32,
+    )>()
 external ffi.Pointer<ImageHandle> pixer_crop_imm(
   ffi.Pointer<ImageHandle> handle,
   int x,
@@ -189,15 +218,18 @@ external ffi.Pointer<ImageHandle> pixer_crop_imm(
 
 /// Rotate an image 90 degrees clockwise
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
-external ffi.Pointer<ImageHandle> pixer_rotate90(ffi.Pointer<ImageHandle> handle);
+external ffi.Pointer<ImageHandle> pixer_rotate90(
+    ffi.Pointer<ImageHandle> handle);
 
 /// Rotate an image 180 degrees
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
-external ffi.Pointer<ImageHandle> pixer_rotate180(ffi.Pointer<ImageHandle> handle);
+external ffi.Pointer<ImageHandle> pixer_rotate180(
+    ffi.Pointer<ImageHandle> handle);
 
 /// Rotate an image 270 degrees clockwise
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
-external ffi.Pointer<ImageHandle> pixer_rotate270(ffi.Pointer<ImageHandle> handle);
+external ffi.Pointer<ImageHandle> pixer_rotate270(
+    ffi.Pointer<ImageHandle> handle);
 
 /// Flip an image horizontally
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
@@ -210,27 +242,34 @@ external ffi.Pointer<ImageHandle> pixer_flipv(ffi.Pointer<ImageHandle> handle);
 /// Apply a Gaussian blur with the given standard deviation in pixels.
 ///
 /// `sigma` must be finite and `>= 0`. `sigma == 0` returns an unchanged copy.
-@ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Float)>()
-external ffi.Pointer<ImageHandle> pixer_blur(ffi.Pointer<ImageHandle> handle, double sigma);
+@ffi.Native<
+    ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Float)>()
+external ffi.Pointer<ImageHandle> pixer_blur(
+    ffi.Pointer<ImageHandle> handle, double sigma);
 
 /// Add `value` to every channel of every pixel.
 ///
 /// Values are clamped per-channel to `[0, 255]`. Negative values darken,
 /// positive values brighten. The practical range is roughly `-255..=255`;
 /// larger magnitudes simply saturate.
-@ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Int32)>()
-external ffi.Pointer<ImageHandle> pixer_brighten(ffi.Pointer<ImageHandle> handle, int value);
+@ffi.Native<
+    ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Int32)>()
+external ffi.Pointer<ImageHandle> pixer_brighten(
+    ffi.Pointer<ImageHandle> handle, int value);
 
 /// Adjust contrast around the midpoint.
 ///
 /// `c == 0.0` leaves the image unchanged. Positive values increase contrast,
 /// negative values decrease it. `c` must be finite.
-@ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Float)>()
-external ffi.Pointer<ImageHandle> pixer_adjust_contrast(ffi.Pointer<ImageHandle> handle, double c);
+@ffi.Native<
+    ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Float)>()
+external ffi.Pointer<ImageHandle> pixer_adjust_contrast(
+    ffi.Pointer<ImageHandle> handle, double c);
 
 /// Convert to grayscale
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
-external ffi.Pointer<ImageHandle> pixer_grayscale(ffi.Pointer<ImageHandle> handle);
+external ffi.Pointer<ImageHandle> pixer_grayscale(
+    ffi.Pointer<ImageHandle> handle);
 
 /// Invert colors (returns new image)
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
@@ -260,13 +299,13 @@ enum FilterTypeEnum {
   const FilterTypeEnum(this.value);
 
   static FilterTypeEnum fromValue(int value) => switch (value) {
-    0 => Nearest,
-    1 => Triangle,
-    2 => CatmullRom,
-    3 => Gaussian,
-    4 => Lanczos3,
-    _ => throw ArgumentError('Unknown value for FilterTypeEnum: $value'),
-  };
+        0 => Nearest,
+        1 => Triangle,
+        2 => CatmullRom,
+        3 => Gaussian,
+        4 => Lanczos3,
+        _ => throw ArgumentError('Unknown value for FilterTypeEnum: $value'),
+      };
 }
 
 typedef FilterTypeEnum$1 = ffi.Uint32;
@@ -309,18 +348,18 @@ enum ImageErrorCode {
   const ImageErrorCode(this.value);
 
   static ImageErrorCode fromValue(int value) => switch (value) {
-    0 => Success,
-    1 => InvalidPath,
-    2 => UnsupportedFormat,
-    3 => DecodingError,
-    4 => EncodingError,
-    5 => IoError,
-    6 => InvalidDimensions,
-    7 => InvalidPointer,
-    8 => InvalidParameter,
-    99 => Unknown,
-    _ => throw ArgumentError('Unknown value for ImageErrorCode: $value'),
-  };
+        0 => Success,
+        1 => InvalidPath,
+        2 => UnsupportedFormat,
+        3 => DecodingError,
+        4 => EncodingError,
+        5 => IoError,
+        6 => InvalidDimensions,
+        7 => InvalidPointer,
+        8 => InvalidParameter,
+        99 => Unknown,
+        _ => throw ArgumentError('Unknown value for ImageErrorCode: $value'),
+      };
 }
 
 typedef ImageErrorCode$1 = ffi.Uint32;
@@ -354,15 +393,15 @@ enum ImageFormatEnum {
   const ImageFormatEnum(this.value);
 
   static ImageFormatEnum fromValue(int value) => switch (value) {
-    0 => Png,
-    1 => Jpeg,
-    2 => Gif,
-    3 => WebP,
-    4 => Bmp,
-    5 => Ico,
-    6 => Tiff,
-    _ => throw ArgumentError('Unknown value for ImageFormatEnum: $value'),
-  };
+        0 => Png,
+        1 => Jpeg,
+        2 => Gif,
+        3 => WebP,
+        4 => Bmp,
+        5 => Ico,
+        6 => Tiff,
+        _ => throw ArgumentError('Unknown value for ImageFormatEnum: $value'),
+      };
 }
 
 typedef ImageFormatEnum$1 = ffi.Uint32;

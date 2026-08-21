@@ -40,7 +40,8 @@ final class Pixer implements ffi.Finalizable {
   }
 
   static final _finalizer = ffi.NativeFinalizer(
-    ffi.Native.addressOf<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ImageHandle>)>>(
+    ffi.Native.addressOf<
+        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ImageHandle>)>>(
       pixer_free,
     ).cast(),
   );
@@ -50,7 +51,8 @@ final class Pixer implements ffi.Finalizable {
   PixerMetadata? _cachedMetadata;
 
   static int _estimateExternalSize(ffi.Pointer<ImageHandle> handle) {
-    final metadataPtr = malloc.allocate<ImageMetadata>(ffi.sizeOf<ImageMetadata>());
+    final metadataPtr =
+        malloc.allocate<ImageMetadata>(ffi.sizeOf<ImageMetadata>());
     try {
       final errorCode = pixer_get_metadata(handle, metadataPtr);
       if (errorCode != 0) return 0;
@@ -108,7 +110,8 @@ final class Pixer implements ffi.Finalizable {
     final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
     try {
       dataPtr.asTypedList(data.length).setAll(0, data);
-      final handle = pixer_load_from_memory_with_error(dataPtr, data.length, errorPtr);
+      final handle =
+          pixer_load_from_memory_with_error(dataPtr, data.length, errorPtr);
       if (handle == ffi.nullptr) {
         final errorCode = ImageErrorCode.fromValue(errorPtr.value);
         throw PixerException.fromCode(errorCode, context: 'input: memory');
@@ -140,11 +143,75 @@ final class Pixer implements ffi.Finalizable {
       );
       if (handle == ffi.nullptr) {
         final errorCode = ImageErrorCode.fromValue(errorPtr.value);
-        throw PixerException.fromCode(errorCode, context: 'input: memory, format: ${format.name}');
+        throw PixerException.fromCode(errorCode,
+            context: 'input: memory, format: ${format.name}');
       }
       return Pixer._(handle);
     } finally {
       malloc.free(dataPtr);
+      malloc.free(errorPtr);
+    }
+  }
+
+  /// Reads image metadata from a file path without decoding pixel data.
+  ///
+  /// This is intended for admission checks before loading very large images.
+  static PixerMetadata readMetadataFromFile(String path) {
+    if (path.trim().isEmpty) {
+      throw InvalidPathException('path is empty');
+    }
+    final pathPtr = path.toNativeUtf8();
+    final metadataPtr = malloc.allocate<ImageMetadata>(
+      ffi.sizeOf<ImageMetadata>(),
+    );
+    final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
+    try {
+      final errorCode = pixer_read_metadata_from_file_with_error(
+        pathPtr.cast(),
+        metadataPtr,
+        errorPtr,
+      );
+      final error = _errorFromValue(errorCode);
+      if (error != ImageErrorCode.Success) {
+        throw PixerException.fromCode(error, context: 'path: $path');
+      }
+      return PixerMetadata.fromNative(metadataPtr);
+    } finally {
+      malloc.free(pathPtr);
+      malloc.free(metadataPtr);
+      malloc.free(errorPtr);
+    }
+  }
+
+  /// Reads image metadata from a byte buffer without decoding pixel data.
+  ///
+  /// This copies the compressed input bytes across FFI, but avoids allocating
+  /// the decoded pixel buffer.
+  static PixerMetadata readMetadataFromMemory(Uint8List data) {
+    if (data.isEmpty) {
+      throw DecodingException('input buffer is empty');
+    }
+    final dataPtr = malloc.allocate<ffi.Uint8>(data.length);
+    final metadataPtr = malloc.allocate<ImageMetadata>(
+      ffi.sizeOf<ImageMetadata>(),
+    );
+    final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
+    try {
+      dataPtr.asTypedList(data.length).setAll(0, data);
+      final errorCode = pixer_read_metadata_from_memory_with_error(
+        dataPtr,
+        data.length,
+        metadataPtr,
+        errorPtr,
+      );
+      final error = _errorFromValue(errorCode);
+      if (error != ImageErrorCode.Success) {
+        throw PixerException.fromCode(error, context: 'input: memory');
+      }
+      return PixerMetadata.fromNative(metadataPtr);
+    } finally {
+      malloc.free(dataPtr);
+      malloc.free(metadataPtr);
       malloc.free(errorPtr);
     }
   }
@@ -158,7 +225,8 @@ final class Pixer implements ffi.Finalizable {
 
   void _validateDimensions(int width, int height, {String? context}) {
     if (width <= 0 || height <= 0) {
-      throw InvalidDimensionsException(context ?? 'width and height must be > 0');
+      throw InvalidDimensionsException(
+          context ?? 'width and height must be > 0');
     }
   }
 
@@ -166,7 +234,8 @@ final class Pixer implements ffi.Finalizable {
     if (x < 0 || y < 0) {
       throw InvalidDimensionsException('x and y must be >= 0');
     }
-    _validateDimensions(width, height, context: 'crop width and height must be > 0');
+    _validateDimensions(width, height,
+        context: 'crop width and height must be > 0');
 
     // Bounds validation
     final meta = getMetadata();
@@ -189,7 +258,7 @@ final class Pixer implements ffi.Finalizable {
     return Pixer._(handle);
   }
 
-  ImageErrorCode _errorFromValue(int value) {
+  static ImageErrorCode _errorFromValue(int value) {
     try {
       return ImageErrorCode.fromValue(value);
     } on ArgumentError {
@@ -205,7 +274,8 @@ final class Pixer implements ffi.Finalizable {
     _checkDisposed();
     if (_cachedMetadata != null) return _cachedMetadata!;
 
-    final metadataPtr = malloc.allocate<ImageMetadata>(ffi.sizeOf<ImageMetadata>());
+    final metadataPtr =
+        malloc.allocate<ImageMetadata>(ffi.sizeOf<ImageMetadata>());
     try {
       final errorCode = pixer_get_metadata(_handle, metadataPtr);
       final error = _errorFromValue(errorCode);
@@ -266,7 +336,8 @@ final class Pixer implements ffi.Finalizable {
   /// [resizeExact] to force exact dimensions.
   ///
   /// Returns a new [Pixer] instance. The original is not modified.
-  Pixer resize(int width, int height, {FilterTypeEnum filter = FilterTypeEnum.Lanczos3}) {
+  Pixer resize(int width, int height,
+      {FilterTypeEnum filter = FilterTypeEnum.Lanczos3}) {
     _checkDisposed();
     _validateDimensions(width, height);
     final handle = pixer_resize(_handle, width, height, filter.value);
@@ -279,7 +350,8 @@ final class Pixer implements ffi.Finalizable {
   /// aspect ratio.
   ///
   /// Returns a new [Pixer] instance. The original is not modified.
-  Pixer resizeExact(int width, int height, {FilterTypeEnum filter = FilterTypeEnum.Lanczos3}) {
+  Pixer resizeExact(int width, int height,
+      {FilterTypeEnum filter = FilterTypeEnum.Lanczos3}) {
     _checkDisposed();
     _validateDimensions(width, height);
     final handle = pixer_resize_exact(_handle, width, height, filter.value);

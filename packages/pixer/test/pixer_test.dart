@@ -1,82 +1,85 @@
 import 'dart:typed_data';
+import 'dart:io' as io;
+
 import 'package:pixer/pixer.dart';
 import 'package:test/test.dart';
 
 Uint8List _transparentPng() => Uint8List.fromList([
-  0x89,
-  0x50,
-  0x4E,
-  0x47,
-  0x0D,
-  0x0A,
-  0x1A,
-  0x0A,
-  0x00,
-  0x00,
-  0x00,
-  0x0D,
-  0x49,
-  0x48,
-  0x44,
-  0x52,
-  0x00,
-  0x00,
-  0x00,
-  0x01,
-  0x00,
-  0x00,
-  0x00,
-  0x01,
-  0x08,
-  0x06,
-  0x00,
-  0x00,
-  0x00,
-  0x1F,
-  0x15,
-  0xC4,
-  0x89,
-  0x00,
-  0x00,
-  0x00,
-  0x0A,
-  0x49,
-  0x44,
-  0x41,
-  0x54,
-  0x78,
-  0x9C,
-  0x63,
-  0x00,
-  0x01,
-  0x00,
-  0x00,
-  0x05,
-  0x00,
-  0x01,
-  0x0D,
-  0x0A,
-  0x2D,
-  0xB4,
-  0x00,
-  0x00,
-  0x00,
-  0x00,
-  0x49,
-  0x45,
-  0x4E,
-  0x44,
-  0xAE,
-  0x42,
-  0x60,
-  0x82,
-]);
+      0x89,
+      0x50,
+      0x4E,
+      0x47,
+      0x0D,
+      0x0A,
+      0x1A,
+      0x0A,
+      0x00,
+      0x00,
+      0x00,
+      0x0D,
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x08,
+      0x06,
+      0x00,
+      0x00,
+      0x00,
+      0x1F,
+      0x15,
+      0xC4,
+      0x89,
+      0x00,
+      0x00,
+      0x00,
+      0x0A,
+      0x49,
+      0x44,
+      0x41,
+      0x54,
+      0x78,
+      0x9C,
+      0x63,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0x05,
+      0x00,
+      0x01,
+      0x0D,
+      0x0A,
+      0x2D,
+      0xB4,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x49,
+      0x45,
+      0x4E,
+      0x44,
+      0xAE,
+      0x42,
+      0x60,
+      0x82,
+    ]);
 
 void main() {
   group('Pixer', () {
     test('loads image from file throws IoException for missing files', () {
       // For missing files, we now get specific IoException instead of generic LoadException
-      expect(() => Pixer.fromFile('nonexistent.jpg'), throwsA(isA<IoException>()));
+      expect(
+          () => Pixer.fromFile('nonexistent.jpg'), throwsA(isA<IoException>()));
     });
 
     test('loads image from memory', () {
@@ -178,6 +181,40 @@ void main() {
       expect(metadata.colorType, isA<ColorType>());
 
       image.dispose();
+    });
+
+    test('reads metadata from memory without constructing image handle', () {
+      final metadata = Pixer.readMetadataFromMemory(_transparentPng());
+
+      expect(metadata.width, equals(1));
+      expect(metadata.height, equals(1));
+      expect(metadata.colorType, equals(ColorType.rgba));
+    });
+
+    test('reads metadata from file without constructing image handle',
+        () async {
+      final directory = await io.Directory.systemTemp.createTemp(
+        'pixer_metadata_test_',
+      );
+      final file = io.File('${directory.path}/transparent.png');
+      try {
+        await file.writeAsBytes(_transparentPng());
+
+        final metadata = Pixer.readMetadataFromFile(file.path);
+
+        expect(metadata.width, equals(1));
+        expect(metadata.height, equals(1));
+        expect(metadata.colorType, equals(ColorType.rgba));
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    });
+
+    test('read metadata from memory throws for invalid data', () {
+      expect(
+        () => Pixer.readMetadataFromMemory(Uint8List.fromList([1, 2, 3])),
+        throwsA(isA<PixerException>()),
+      );
     });
 
     test('encodes image to buffer', () {
@@ -352,7 +389,8 @@ void main() {
       image.dispose();
       expect(image.isDisposed, isTrue);
 
-      expect(() => image.getMetadata(), throwsA(isA<InvalidPointerException>()));
+      expect(
+          () => image.getMetadata(), throwsA(isA<InvalidPointerException>()));
     });
 
     test('filter type enum has all values', () {
@@ -818,7 +856,8 @@ void main() {
       // when format is detected but data is corrupted)
       final invalidData = Uint8List.fromList([0x00, 0x01, 0x02, 0x03]);
 
-      expect(() => Pixer.fromMemory(invalidData), throwsA(isA<PixerException>()));
+      expect(
+          () => Pixer.fromMemory(invalidData), throwsA(isA<PixerException>()));
     });
   });
 }
