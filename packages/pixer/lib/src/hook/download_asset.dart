@@ -6,7 +6,7 @@ import 'package:pixer/src/hook/targets.dart';
 import 'package:pixer/src/hook/version.dart';
 
 Uri downloadUri(String target) =>
-    Uri.parse('https://github.com/hawkkiller/pixer/releases/download/$version/$target');
+    Uri.parse('https://github.com/amiltus/pixer/releases/download/$version/$target');
 
 final _httpClient = HttpClient();
 
