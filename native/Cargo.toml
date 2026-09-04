@@ -2,15 +2,24 @@
 name = "pixer"
 version = "0.1.0"
 edition = "2024"
+autobins = false
 
 [lib]
 crate-type = ["staticlib", "cdylib"]
+
+[[bin]]
+name = "decode_bench"
+path = "src/bin/decode_bench.rs"
+required-features = ["bench"]
 
 [dependencies]
 image = "0.25.5"
 libc = "0.2.177"
 turbojpeg = "1.4.0"
 png = "0.18.0"
+
+[features]
+bench = []
 
 [profile.release]
 opt-level = 3

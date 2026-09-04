@@ -9,3 +9,14 @@ linker = "riscv64-linux-gnu-gcc"
 
 [target.i686-unknown-linux-gnu]
 linker = "i686-linux-gnu-gcc"
+
+[env]
+# turbojpeg-sys builds libjpeg-turbo from source via CMake, which lets clang
+# default to whatever iOS SDK is installed (e.g. 26.5) instead of the actual
+# minimum iOS version Rust's own target triple links against (10.0). A large
+# enough C stack frame (fill_inverse_cmap in libjpeg-turbo's jquant2.c) then
+# gets compiled with a stack probe (___chkstk_darwin) that only exists for
+# the newer deployment target, and the final link fails with an undefined
+# symbol. Setting the same env var clang itself honors for -mios-version-min
+# keeps both sides of the link consistent. Harmless on non-Apple targets.
+IPHONEOS_DEPLOYMENT_TARGET = "10.0"
