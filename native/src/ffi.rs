@@ -2,6 +2,7 @@ use image::{
     DynamicImage, ImageError, ImageFormat, ImageReader, codecs::jpeg::JpegEncoder,
     imageops::FilterType,
 };
+use turbojpeg::{Decompressor, Image as TjImage, PixelFormat, ScalingFactor};
 use std::{
     ffi::{CStr, CString},
     io::Cursor,
@@ -362,6 +363,136 @@ pub extern "C" fn pixer_load_from_memory_with_format_and_error(
     let buffer = unsafe { slice::from_raw_parts(data, len) };
 
     match image::load_from_memory_with_format(buffer, format.to_image_format()) {
+        Ok(img) => {
+            set_error(out_error, ImageErrorCode::Success);
+            into_handle(img)
+        }
+        Err(e) => {
+            set_error(out_error, error_to_code(&e));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Picks the smallest TurboJPEG scaling factor whose output is still at
+/// least as large as `(target_width, target_height)` in both dimensions
+/// (i.e. "cover", not "contain" - callers that only need "contain" simply
+/// downscale further afterwards, which is cheap once the buffer is small).
+/// Falls back to 1/1 (no scaling) if no smaller factor covers the target,
+/// or if the target is zero/degenerate.
+fn pick_scaling_factor(src_width: usize, src_height: usize, target_width: u32, target_height: u32) -> ScalingFactor {
+    let identity = ScalingFactor::new(1, 1);
+    if target_width == 0 || target_height == 0 || src_width == 0 || src_height == 0 {
+        return identity;
+    }
+    let needed = f64::max(
+        target_width as f64 / src_width as f64,
+        target_height as f64 / src_height as f64,
+    );
+    if needed >= 1.0 {
+        return identity;
+    }
+    let mut factors = Decompressor::supported_scaling_factors();
+    factors.sort_by(|a, b| {
+        let ra = a.num() as f64 / a.denom() as f64;
+        let rb = b.num() as f64 / b.denom() as f64;
+        ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    factors
+        .into_iter()
+        .find(|f| (f.num() as f64 / f.denom() as f64) >= needed - 1e-9)
+        .unwrap_or(identity)
+}
+
+/// Attempts a decode-time-downscaled JPEG load via TurboJPEG's DCT scaling
+/// (dropping high-frequency coefficients during decode, never materialising
+/// the full-resolution pixel buffer). Returns `None` for non-JPEG input or
+/// on any TurboJPEG failure, so callers can fall back to the general-purpose
+/// `image`-crate decode path transparently.
+fn try_decode_scaled_jpeg(bytes: &[u8], target_width: u32, target_height: u32) -> Option<DynamicImage> {
+    let mut decompressor = Decompressor::new().ok()?;
+    let header = decompressor.read_header(bytes).ok()?;
+    let factor = pick_scaling_factor(header.width, header.height, target_width, target_height);
+    decompressor.set_scaling_factor(factor).ok()?;
+
+    let scaled = header.scaled(factor);
+    let pitch = scaled.width * PixelFormat::RGB.size();
+    let mut pixels = vec![0u8; pitch * scaled.height];
+    let image = TjImage {
+        pixels: &mut pixels[..],
+        width: scaled.width,
+        pitch,
+        height: scaled.height,
+        format: PixelFormat::RGB,
+    };
+    decompressor.decompress(bytes, image).ok()?;
+
+    image::RgbImage::from_raw(scaled.width as u32, scaled.height as u32, pixels).map(DynamicImage::ImageRgb8)
+}
+
+/// Loads an image from memory, decoding at the smallest resolution that
+/// still covers `(target_width, target_height)` when the source is a JPEG.
+///
+/// This exists for thumbnail generation: a JPEG's DCT structure lets the
+/// decoder skip reconstructing full resolution when the caller only needs a
+/// much smaller output, cutting decode memory and CPU roughly in proportion
+/// to the scaling factor chosen. Non-JPEG input, or any TurboJPEG failure,
+/// falls back transparently to the regular full decode.
+#[unsafe(no_mangle)]
+pub extern "C" fn pixer_load_scaled_from_memory_with_error(
+    data: *const u8,
+    len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_error: *mut ImageErrorCode,
+) -> *mut ImageHandle {
+    if data.is_null() || len == 0 {
+        set_error(out_error, ImageErrorCode::InvalidPointer);
+        return std::ptr::null_mut();
+    }
+    let buffer = unsafe { slice::from_raw_parts(data, len) };
+
+    if let Some(img) = try_decode_scaled_jpeg(buffer, target_width, target_height) {
+        set_error(out_error, ImageErrorCode::Success);
+        return into_handle(img);
+    }
+
+    match image::load_from_memory(buffer) {
+        Ok(img) => {
+            set_error(out_error, ImageErrorCode::Success);
+            into_handle(img)
+        }
+        Err(e) => {
+            set_error(out_error, error_to_code(&e));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// File-path counterpart of [`pixer_load_scaled_from_memory_with_error`].
+#[unsafe(no_mangle)]
+pub extern "C" fn pixer_load_scaled_from_file_with_error(
+    path: *const c_char,
+    target_width: u32,
+    target_height: u32,
+    out_error: *mut ImageErrorCode,
+) -> *mut ImageHandle {
+    let path_str = match cstr_to_str(path) {
+        Ok(p) => p,
+        Err(code) => {
+            set_error(out_error, code);
+            return std::ptr::null_mut();
+        }
+    };
+
+    if let Ok(bytes) = std::fs::read(&path_str) {
+        if let Some(img) = try_decode_scaled_jpeg(&bytes, target_width, target_height) {
+            set_error(out_error, ImageErrorCode::Success);
+            return into_handle(img);
+        }
+    }
+
+    match image::open(Path::new(&path_str)) {
         Ok(img) => {
             set_error(out_error, ImageErrorCode::Success);
             into_handle(img)
