@@ -5,7 +5,11 @@ edition = "2024"
 autobins = false
 
 [lib]
-crate-type = ["staticlib", "cdylib"]
+# "rlib" is only so decode_bench (a bin target in this same package,
+# gated behind the `bench` feature) can link against ffi::try_decode_scaled
+# directly for benchmarking the real code path - Dart only ever loads the
+# staticlib/cdylib output, never this rlib.
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [[bin]]
 name = "decode_bench"

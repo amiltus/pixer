@@ -1,16 +1,24 @@
-// Standalone benchmark comparing two JPEG thumbnail decode strategies:
-//   full   - image::open() (full-resolution decode) then .resize() down
-//   scaled - TurboJPEG DCT-scaled decode to the smallest covering size,
-//            then the same final .resize() for the exact target
+// Standalone benchmark comparing thumbnail decode strategies:
+//   full         - image::open() (full-resolution decode) then .resize() down
+//   scaled       - standalone reimplementation of TurboJPEG DCT-scaled decode
+//   png-streaming - standalone reimplementation of PNG scanline streaming
+//   scaled-real  - the actual ffi::try_decode_scaled dispatch used by
+//                  pixer_load_scaled_from_memory_with_error/_from_file_with_error
+//                  in production (JPEG or PNG, whichever matches), then the
+//                  same final .resize() for the exact target
 //
 // Run each mode in its own process (so peak RSS reflects only that mode)
 // under `/usr/bin/time -l` to get real, measured wall time and peak memory,
-// not estimates:
+// not estimates. Requires the `bench` feature (kept off the real release
+// build so this scratch binary never gets cross-compiled to every
+// platform):
 //
-//   cargo run --release --bin decode_bench -- full   <path> <w> <h>
-//   cargo run --release --bin decode_bench -- scaled <path> <w> <h>
+//   cargo build --release --features bench --bin decode_bench
+//   /usr/bin/time -l ./target/release/decode_bench full        <path> <w> <h>
+//   /usr/bin/time -l ./target/release/decode_bench scaled-real <path> <w> <h>
 
 use image::{DynamicImage, imageops::FilterType};
+use pixer::ffi::try_decode_scaled;
 use std::time::Instant;
 
 fn pick_scaling_factor(
@@ -170,6 +178,12 @@ fn main() {
         "full" => image::load_from_memory(&bytes).unwrap(),
         "scaled" => decode_scaled(&bytes, target_w, target_h),
         "png-streaming" => decode_png_streaming(path, target_w, target_h),
+        // Calls the exact same dispatch pixer_load_scaled_from_memory_with_error
+        // uses internally (ffi::try_decode_scaled), not a standalone
+        // reimplementation - this is what the two modes above were meant to
+        // stand in for before that code existed in ffi.rs.
+        "scaled-real" => try_decode_scaled(&bytes, target_w, target_h)
+            .unwrap_or_else(|| panic!("try_decode_scaled returned None for {path} - not a JPEG/PNG it can fast-path, or decode failed")),
         other => panic!("unknown mode: {other}"),
     };
     let t_decode = t0.elapsed();

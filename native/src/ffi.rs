@@ -451,14 +451,151 @@ fn try_decode_scaled_jpeg(bytes: &[u8], target_width: u32, target_height: u32) -
     image::RgbImage::from_raw(scaled.width as u32, scaled.height as u32, pixels).map(DynamicImage::ImageRgb8)
 }
 
-/// Loads an image from memory, decoding at the smallest resolution that
-/// still covers `(target_width, target_height)` when the source is a JPEG.
+const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+fn is_jpeg_magic(bytes: &[u8]) -> bool {
+    bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8
+}
+
+fn is_png_magic(bytes: &[u8]) -> bool {
+    bytes.len() >= 8 && bytes[..8] == PNG_SIGNATURE
+}
+
+/// Attempts a decode-time-downscaled PNG load by streaming scanlines via
+/// `png::Reader::next_row` and box-downsampling both axes on the fly,
+/// discarding each source row immediately after - never materialising more
+/// than one output row's worth of source data plus the (much smaller)
+/// intermediate buffer, unlike a full decode which must hold every row of
+/// the full-resolution image before returning.
 ///
-/// This exists for thumbnail generation: a JPEG's DCT structure lets the
-/// decoder skip reconstructing full resolution when the caller only needs a
-/// much smaller output, cutting decode memory and CPU roughly in proportion
-/// to the scaling factor chosen. Non-JPEG input, or any TurboJPEG failure,
-/// falls back transparently to the regular full decode.
+/// Only handles 8-bit, non-interlaced RGB/RGBA PNGs (this covers real-world
+/// photo/screenshot uploads overwhelmingly): paletted, 16-bit, grayscale
+/// (with or without alpha), and Adam7-interlaced PNGs all return `None` so
+/// callers fall back to the general-purpose full decode - interlaced PNGs in
+/// particular deliver rows out of sequence across 7 passes and would
+/// silently corrupt output if run through this row-by-row logic as-is.
+///
+/// The returned image is shrunk to roughly *twice* the requested target size
+/// (per libvips' own guidance: shrink-on-load to ~2x target, then let a
+/// proper filter do the precise final resize) rather than exactly the
+/// target - box-downsampling is a crude filter, and going straight to the
+/// exact final size with it would visibly soften or alias the result versus
+/// finishing with a proper resize afterward, same as the browser-side
+/// implementation in `clientTransferWorker.pica.js`. Returns `None` (no
+/// benefit over full decode) if the image doesn't need to shrink by at
+/// least half in both dimensions.
+fn try_decode_scaled_png<R: std::io::BufRead + std::io::Seek>(
+    reader: R,
+    target_width: u32,
+    target_height: u32,
+) -> Option<DynamicImage> {
+    let decoder = png::Decoder::new(reader);
+    let mut png_reader = decoder.read_info().ok()?;
+    let info = png_reader.info();
+    if info.bit_depth != png::BitDepth::Eight || info.interlaced {
+        return None;
+    }
+    let channels = match info.color_type {
+        png::ColorType::Rgb => 3usize,
+        png::ColorType::Rgba => 4usize,
+        png::ColorType::Grayscale | png::ColorType::GrayscaleAlpha | png::ColorType::Indexed => {
+            return None;
+        }
+    };
+    let width = info.width as usize;
+    let height = info.height as usize;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let scale = f64::min(
+        (target_width as f64 * 2.0) / width as f64,
+        (target_height as f64 * 2.0) / height as f64,
+    )
+    .min(1.0);
+    let group = (1.0 / scale).round().max(1.0) as usize;
+    if group <= 1 {
+        // Wouldn't shrink enough to be worth a box-filtered intermediate;
+        // let the general path do a single proper-quality decode instead.
+        return None;
+    }
+    let out_width = width.div_ceil(group);
+
+    let mut sum_row = vec![0u32; width * channels];
+    let mut group_count = 0u32;
+    let mut output = Vec::<u8>::with_capacity(out_width * channels * (height / group + 1));
+    let mut output_rows = 0usize;
+
+    let flush_row = |sum_row: &mut [u32], count: u32, output: &mut Vec<u8>| {
+        // Horizontal box-downsample: average `group` consecutive pixels per
+        // output column, then divide by the number of source rows summed.
+        for chunk_start in (0..width).step_by(group) {
+            let chunk_end = (chunk_start + group).min(width);
+            for c in 0..channels {
+                let mut acc = 0u32;
+                let mut n = 0u32;
+                for px in chunk_start..chunk_end {
+                    acc += sum_row[px * channels + c];
+                    n += 1;
+                }
+                output.push((acc / (n * count)) as u8);
+            }
+        }
+        sum_row.iter_mut().for_each(|v| *v = 0);
+    };
+
+    while let Some(row) = png_reader.next_row().ok()? {
+        let data = row.data();
+        for (i, &b) in data.iter().enumerate() {
+            sum_row[i] += b as u32;
+        }
+        group_count += 1;
+        if group_count as usize == group {
+            flush_row(&mut sum_row, group_count, &mut output);
+            group_count = 0;
+            output_rows += 1;
+        }
+    }
+    if group_count > 0 {
+        flush_row(&mut sum_row, group_count, &mut output);
+        output_rows += 1;
+    }
+
+    match channels {
+        3 => image::RgbImage::from_raw(out_width as u32, output_rows as u32, output)
+            .map(DynamicImage::ImageRgb8),
+        4 => image::RgbaImage::from_raw(out_width as u32, output_rows as u32, output)
+            .map(DynamicImage::ImageRgba8),
+        _ => unreachable!("channels is only ever set to 3 or 4 above"),
+    }
+}
+
+/// Dispatches to whichever decode-time-downscaled path matches `bytes`'
+/// format - JPEG via TurboJPEG's DCT scaling, PNG via streaming scanline
+/// box-downsampling - or `None` for any other format or on failure, so
+/// callers can fall back to the general-purpose full decode transparently.
+///
+/// `pub` only so `decode_bench` can measure the exact real code path used
+/// by `pixer_load_scaled_from_memory_with_error`/`_from_file_with_error`.
+pub fn try_decode_scaled(bytes: &[u8], target_width: u32, target_height: u32) -> Option<DynamicImage> {
+    if is_jpeg_magic(bytes) {
+        return try_decode_scaled_jpeg(bytes, target_width, target_height);
+    }
+    if is_png_magic(bytes) {
+        return try_decode_scaled_png(Cursor::new(bytes), target_width, target_height);
+    }
+    None
+}
+
+/// Loads an image from memory, decoding at a reduced resolution suited to
+/// `(target_width, target_height)` when the source is a JPEG or PNG.
+///
+/// This exists for thumbnail generation: a JPEG's DCT structure and a PNG's
+/// scanline structure both let the decoder avoid reconstructing full
+/// resolution when the caller only needs a much smaller output, cutting
+/// decode memory and CPU roughly in proportion to the scale chosen. Any
+/// other format, or a decode-time-downscale failure, falls back
+/// transparently to the regular full decode.
 #[unsafe(no_mangle)]
 pub extern "C" fn pixer_load_scaled_from_memory_with_error(
     data: *const u8,
@@ -473,7 +610,7 @@ pub extern "C" fn pixer_load_scaled_from_memory_with_error(
     }
     let buffer = unsafe { slice::from_raw_parts(data, len) };
 
-    if let Some(img) = try_decode_scaled_jpeg(buffer, target_width, target_height) {
+    if let Some(img) = try_decode_scaled(buffer, target_width, target_height) {
         set_error(out_error, ImageErrorCode::Success);
         return into_handle(img);
     }
@@ -507,7 +644,7 @@ pub extern "C" fn pixer_load_scaled_from_file_with_error(
     };
 
     if let Ok(bytes) = std::fs::read(&path_str) {
-        if let Some(img) = try_decode_scaled_jpeg(&bytes, target_width, target_height) {
+        if let Some(img) = try_decode_scaled(&bytes, target_width, target_height) {
             set_error(out_error, ImageErrorCode::Success);
             return into_handle(img);
         }
@@ -859,4 +996,144 @@ pub extern "C" fn pixer_invert(handle: *const ImageHandle) -> *mut ImageHandle {
         into_handle(cloned)
     })
     .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Encodes a synthetic PNG with an arbitrary color type/bit depth/
+    /// interlacing combination, for exercising `try_decode_scaled_png`'s
+    /// format gating without needing checked-in binary fixtures. Pixel
+    /// content is an arbitrary varying fill - these tests only care about
+    /// dimensions and which format/interlace combinations are accepted.
+    fn encode_test_png(
+        width: u32,
+        height: u32,
+        color_type: png::ColorType,
+        bit_depth: png::BitDepth,
+        interlaced: bool,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut info = png::Info::default();
+        info.width = width;
+        info.height = height;
+        info.color_type = color_type;
+        info.bit_depth = bit_depth;
+        info.interlaced = interlaced;
+        let mut encoder = png::Encoder::with_info(&mut buf, info).unwrap();
+        if color_type == png::ColorType::Indexed {
+            // A tiny palette is enough for a synthetic fixture; real
+            // paletted PNGs always carry one, which is why the streaming
+            // path can't just treat the index bytes as pixel samples.
+            encoder.set_palette(vec![255u8, 0, 0, 0, 255, 0, 0, 0, 255]);
+        }
+        let mut writer = encoder.write_header().unwrap();
+
+        let bytes_per_sample = if bit_depth == png::BitDepth::Sixteen { 2 } else { 1 };
+        let channels = match color_type {
+            png::ColorType::Grayscale | png::ColorType::Indexed => 1,
+            png::ColorType::GrayscaleAlpha => 2,
+            png::ColorType::Rgb => 3,
+            png::ColorType::Rgba => 4,
+        };
+        let byte_count = width as usize * height as usize * channels * bytes_per_sample;
+        let data: Vec<u8> = (0..byte_count).map(|i| (i % 200 + 20) as u8).collect();
+        writer.write_image_data(&data).unwrap();
+        drop(writer);
+        buf
+    }
+
+    #[test]
+    fn scaled_png_streams_rgb8_non_interlaced() {
+        let bytes = encode_test_png(400, 200, png::ColorType::Rgb, png::BitDepth::Eight, false);
+        let img = try_decode_scaled_png(Cursor::new(bytes.as_slice()), 50, 25)
+            .expect("RGB8 non-interlaced PNG should use the streaming path");
+        assert!(img.width() < 400 && img.width() >= 50);
+        assert!(img.height() < 200 && img.height() >= 25);
+    }
+
+    #[test]
+    fn scaled_png_streams_rgba8_non_interlaced() {
+        let bytes = encode_test_png(400, 200, png::ColorType::Rgba, png::BitDepth::Eight, false);
+        let img = try_decode_scaled_png(Cursor::new(bytes.as_slice()), 50, 25)
+            .expect("RGBA8 non-interlaced PNG should use the streaming path");
+        assert!(img.width() < 400);
+        assert_eq!(img.color(), image::ColorType::Rgba8);
+    }
+
+    #[test]
+    fn scaled_png_returns_none_for_images_that_barely_shrink() {
+        // Requesting a target close to the source size shouldn't produce a
+        // degenerate 1-group-per-pixel "box downsample" - the general path
+        // handles this better with a real filter.
+        let bytes = encode_test_png(100, 100, png::ColorType::Rgb, png::BitDepth::Eight, false);
+        assert!(try_decode_scaled_png(Cursor::new(bytes.as_slice()), 90, 90).is_none());
+    }
+
+    #[test]
+    fn scaled_png_falls_back_for_paletted() {
+        let bytes = encode_test_png(400, 200, png::ColorType::Indexed, png::BitDepth::Eight, false);
+        assert!(try_decode_scaled_png(Cursor::new(bytes.as_slice()), 50, 25).is_none());
+    }
+
+    #[test]
+    fn scaled_png_falls_back_for_16bit() {
+        let bytes = encode_test_png(400, 200, png::ColorType::Rgb, png::BitDepth::Sixteen, false);
+        assert!(try_decode_scaled_png(Cursor::new(bytes.as_slice()), 50, 25).is_none());
+    }
+
+    #[test]
+    fn scaled_png_falls_back_for_grayscale() {
+        let bytes = encode_test_png(400, 200, png::ColorType::Grayscale, png::BitDepth::Eight, false);
+        assert!(try_decode_scaled_png(Cursor::new(bytes.as_slice()), 50, 25).is_none());
+    }
+
+    #[test]
+    fn scaled_png_falls_back_for_grayscale_alpha() {
+        let bytes =
+            encode_test_png(400, 200, png::ColorType::GrayscaleAlpha, png::BitDepth::Eight, false);
+        assert!(try_decode_scaled_png(Cursor::new(bytes.as_slice()), 50, 25).is_none());
+    }
+
+    #[test]
+    fn scaled_png_falls_back_for_adam7_interlaced() {
+        let bytes = encode_test_png(400, 200, png::ColorType::Rgb, png::BitDepth::Eight, true);
+        assert!(try_decode_scaled_png(Cursor::new(bytes.as_slice()), 50, 25).is_none());
+    }
+
+    #[test]
+    fn fallback_formats_still_decode_correctly_via_the_general_path() {
+        // The streaming fast path bailing must never mean the image is
+        // undecodable - it must fall through to a correct full decode.
+        //
+        // Adam7-interlaced is deliberately not covered here: `write_image_data`
+        // expects pixel data pre-arranged into Adam7 pass order when
+        // `info.interlaced` is set, which `encode_test_png`'s plain raster
+        // fill doesn't do - `scaled_png_falls_back_for_adam7_interlaced`
+        // covers the actually load-bearing behavior (the fast path declines
+        // it) using the same encoder without asserting a correct full
+        // decode of that malformed fixture.
+        for (color_type, bit_depth) in [
+            (png::ColorType::Indexed, png::BitDepth::Eight),
+            (png::ColorType::Rgb, png::BitDepth::Sixteen),
+            (png::ColorType::Grayscale, png::BitDepth::Eight),
+            (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight),
+        ] {
+            let bytes = encode_test_png(64, 32, color_type, bit_depth, false);
+            assert!(
+                try_decode_scaled(&bytes, 16, 16).is_none(),
+                "expected streaming fast path to bail for {color_type:?}/{bit_depth:?}"
+            );
+            let full = image::load_from_memory(&bytes).unwrap_or_else(|e| {
+                panic!("fallback full decode must still succeed for {color_type:?}/{bit_depth:?}: {e}")
+            });
+            assert_eq!((full.width(), full.height()), (64, 32));
+        }
+    }
+
+    #[test]
+    fn dispatch_ignores_non_png_non_jpeg_bytes() {
+        assert!(try_decode_scaled(b"not an image", 50, 50).is_none());
+    }
 }

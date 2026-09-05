@@ -92,14 +92,15 @@ external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_format_and_error(
   ffi.Pointer<ImageErrorCode$1> out_error,
 );
 
-/// Loads an image from memory, decoding at the smallest resolution that
-/// still covers `(target_width, target_height)` when the source is a JPEG.
+/// Loads an image from memory, decoding at a reduced resolution suited to
+/// `(target_width, target_height)` when the source is a JPEG or PNG.
 ///
-/// This exists for thumbnail generation: a JPEG's DCT structure lets the
-/// decoder skip reconstructing full resolution when the caller only needs a
-/// much smaller output, cutting decode memory and CPU roughly in proportion
-/// to the scaling factor chosen. Non-JPEG input, or any TurboJPEG failure,
-/// falls back transparently to the regular full decode.
+/// This exists for thumbnail generation: a JPEG's DCT structure and a PNG's
+/// scanline structure both let the decoder avoid reconstructing full
+/// resolution when the caller only needs a much smaller output, cutting
+/// decode memory and CPU roughly in proportion to the scale chosen. Any
+/// other format, or a decode-time-downscale failure, falls back
+/// transparently to the regular full decode.
 @ffi.Native<
   ffi.Pointer<ImageHandle> Function(
     ffi.Pointer<ffi.Uint8>,
