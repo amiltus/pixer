@@ -1,8 +1,15 @@
 import 'dart:typed_data';
 import 'dart:io' as io;
 
+import 'package:image/image.dart' as img;
 import 'package:pixer/pixer.dart';
 import 'package:test/test.dart';
+
+Uint8List _solidJpeg(int width, int height, {int quality = 90}) {
+  final image = img.Image(width: width, height: height);
+  img.fill(image, color: img.ColorRgb8(120, 160, 200));
+  return Uint8List.fromList(img.encodeJpg(image, quality: quality));
+}
 
 Uint8List _transparentPng() => Uint8List.fromList([
       0x89,
@@ -189,6 +196,25 @@ void main() {
       expect(metadata.width, equals(1));
       expect(metadata.height, equals(1));
       expect(metadata.colorType, equals(ColorType.rgba));
+      expect(metadata.format, equals(ImageFormatEnum.Png));
+    });
+
+    test('reads metadata format for a JPEG without constructing image handle',
+        () {
+      final metadata = Pixer.readMetadataFromMemory(_solidJpeg(64, 32));
+
+      expect(metadata.width, equals(64));
+      expect(metadata.height, equals(32));
+      expect(metadata.format, equals(ImageFormatEnum.Jpeg));
+    });
+
+    test('getMetadata on a decoded handle reports a null format', () {
+      final image = Pixer.fromMemory(_solidJpeg(16, 16));
+      try {
+        expect(image.getMetadata().format, isNull);
+      } finally {
+        image.dispose();
+      }
     });
 
     test('reads metadata from file without constructing image handle',
@@ -214,6 +240,87 @@ void main() {
       expect(
         () => Pixer.readMetadataFromMemory(Uint8List.fromList([1, 2, 3])),
         throwsA(isA<PixerException>()),
+      );
+    });
+
+    test('loadScaledFromMemory on a JPEG covers the requested target size',
+        () {
+      final image = Pixer.loadScaledFromMemory(
+        _solidJpeg(400, 200),
+        targetWidth: 100,
+        targetHeight: 50,
+      );
+      try {
+        final metadata = image.getMetadata();
+        expect(metadata.width, greaterThanOrEqualTo(100));
+        expect(metadata.height, greaterThanOrEqualTo(50));
+        // Covering the target from a 2:1 source shouldn't fall all the way
+        // back to full resolution.
+        expect(metadata.width, lessThan(400));
+      } finally {
+        image.dispose();
+      }
+    });
+
+    test('loadScaledFromFile on a JPEG covers the requested target size',
+        () async {
+      final directory = await io.Directory.systemTemp.createTemp(
+        'pixer_scaled_test_',
+      );
+      final file = io.File('${directory.path}/solid.jpg');
+      try {
+        await file.writeAsBytes(_solidJpeg(400, 200));
+
+        final image = Pixer.loadScaledFromFile(
+          file.path,
+          targetWidth: 100,
+          targetHeight: 50,
+        );
+        try {
+          final metadata = image.getMetadata();
+          expect(metadata.width, greaterThanOrEqualTo(100));
+          expect(metadata.height, greaterThanOrEqualTo(50));
+        } finally {
+          image.dispose();
+        }
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    });
+
+    test('loadScaledFromMemory falls back to full decode for non-JPEG', () {
+      final image = Pixer.loadScaledFromMemory(
+        _transparentPng(),
+        targetWidth: 1,
+        targetHeight: 1,
+      );
+      try {
+        expect(image.getMetadata().width, equals(1));
+      } finally {
+        image.dispose();
+      }
+    });
+
+    test('loadScaledFromMemory throws for non-positive target dimensions',
+        () {
+      expect(
+        () => Pixer.loadScaledFromMemory(
+          _solidJpeg(10, 10),
+          targetWidth: 0,
+          targetHeight: 10,
+        ),
+        throwsA(isA<InvalidDimensionsException>()),
+      );
+    });
+
+    test('loadScaledFromMemory throws for an empty buffer', () {
+      expect(
+        () => Pixer.loadScaledFromMemory(
+          Uint8List(0),
+          targetWidth: 10,
+          targetHeight: 10,
+        ),
+        throwsA(isA<DecodingException>()),
       );
     });
 

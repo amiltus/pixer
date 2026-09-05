@@ -153,6 +153,103 @@ final class Pixer implements ffi.Finalizable {
     }
   }
 
+  /// Loads an image from a file path, decoding at the smallest resolution
+  /// that still covers `(targetWidth, targetHeight)` when the source is a
+  /// JPEG.
+  ///
+  /// For a JPEG, this uses the decoder's DCT-scaling support to skip
+  /// reconstructing full resolution when the caller only needs a much
+  /// smaller output, cutting decode memory and CPU roughly in proportion to
+  /// the scaling factor chosen — the win is largest for baseline JPEGs;
+  /// progressive JPEGs still need their coefficient buffer at full
+  /// resolution, so the benefit is smaller there. Any other format, or a
+  /// TurboJPEG failure, falls back transparently to a regular full decode
+  /// (equivalent to [Pixer.fromFile]).
+  ///
+  /// The returned image is not necessarily exactly `targetWidth` x
+  /// `targetHeight` — it covers at least that size; call [resize] or
+  /// [resizeExact] afterwards for the precise final dimensions.
+  ///
+  /// Throws [InvalidPathException] if the path is empty or invalid.
+  /// Throws [IoException] if the file cannot be read.
+  /// Throws [DecodingException] if the image format cannot be decoded.
+  /// Throws [UnsupportedFormatException] if the format is not supported.
+  factory Pixer.loadScaledFromFile(
+    String path, {
+    required int targetWidth,
+    required int targetHeight,
+  }) {
+    if (path.trim().isEmpty) {
+      throw InvalidPathException('path is empty');
+    }
+    _validateTargetDimensions(targetWidth, targetHeight);
+    final pathPtr = path.toNativeUtf8();
+    final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
+    try {
+      final handle = pixer_load_scaled_from_file_with_error(
+        pathPtr.cast(),
+        targetWidth,
+        targetHeight,
+        errorPtr,
+      );
+      if (handle == ffi.nullptr) {
+        final errorCode = ImageErrorCode.fromValue(errorPtr.value);
+        throw PixerException.fromCode(errorCode, context: 'path: $path');
+      }
+      return Pixer._(handle);
+    } finally {
+      malloc.free(pathPtr);
+      malloc.free(errorPtr);
+    }
+  }
+
+  /// Loads an image from a byte buffer, decoding at the smallest resolution
+  /// that still covers `(targetWidth, targetHeight)` when the source is a
+  /// JPEG.
+  ///
+  /// See [Pixer.loadScaledFromFile] for the full behavior; this is its
+  /// in-memory counterpart.
+  ///
+  /// Throws [DecodingException] if the buffer is empty or cannot be decoded.
+  /// Throws [UnsupportedFormatException] if the format is not supported.
+  factory Pixer.loadScaledFromMemory(
+    Uint8List data, {
+    required int targetWidth,
+    required int targetHeight,
+  }) {
+    if (data.isEmpty) {
+      throw DecodingException('input buffer is empty');
+    }
+    _validateTargetDimensions(targetWidth, targetHeight);
+    final dataPtr = malloc.allocate<ffi.Uint8>(data.length);
+    final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
+    try {
+      dataPtr.asTypedList(data.length).setAll(0, data);
+      final handle = pixer_load_scaled_from_memory_with_error(
+        dataPtr,
+        data.length,
+        targetWidth,
+        targetHeight,
+        errorPtr,
+      );
+      if (handle == ffi.nullptr) {
+        final errorCode = ImageErrorCode.fromValue(errorPtr.value);
+        throw PixerException.fromCode(errorCode, context: 'input: memory');
+      }
+      return Pixer._(handle);
+    } finally {
+      malloc.free(dataPtr);
+      malloc.free(errorPtr);
+    }
+  }
+
+  static void _validateTargetDimensions(int targetWidth, int targetHeight) {
+    if (targetWidth <= 0 || targetHeight <= 0) {
+      throw InvalidDimensionsException(
+          'targetWidth and targetHeight must be > 0');
+    }
+  }
+
   /// Reads image metadata from a file path without decoding pixel data.
   ///
   /// This is intended for admission checks before loading very large images.

@@ -7,39 +7,49 @@
 #include <stdlib.h>
 
 /**
- * Sampling filter used when resizing.
- *
- * Quality and cost roughly increase from top to bottom; `Lanczos3` is the
- * default and produces the sharpest results, `Nearest` is the fastest.
+ * Image container format used for both decoding and encoding.
  */
-enum FilterTypeEnum
-#ifdef __cplusplus
+enum ImageFormatEnum
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint32_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
   /**
-   * Nearest-neighbour. Fastest, blocky output. Good for pixel art.
+   * Portable Network Graphics — lossless, alpha supported.
    */
-  Nearest = 0,
+  Png = 0,
   /**
-   * Linear (a.k.a. bilinear). Cheap, slightly blurry.
+   * JPEG — lossy, no alpha. Quality is configurable on encode.
    */
-  Triangle = 1,
+  Jpeg = 1,
   /**
-   * Catmull-Rom cubic. Sharper than `Triangle`, can ring on edges.
+   * Graphics Interchange Format — palette-based, supports animation
+   * (single-frame only via this API).
    */
-  CatmullRom = 2,
+  Gif = 2,
   /**
-   * Gaussian. Soft output, useful for downscaling without aliasing.
+   * WebP — lossy or lossless, alpha supported.
    */
-  Gaussian = 3,
+  WebP = 3,
   /**
-   * Lanczos with `a = 3`. Highest quality, slowest. Default.
+   * Windows Bitmap — uncompressed, large files.
    */
-  Lanczos3 = 4,
+  Bmp = 4,
+  /**
+   * Windows Icon — multi-resolution container.
+   */
+  Ico = 5,
+  /**
+   * Tagged Image File Format — typically lossless.
+   */
+  Tiff = 6,
 };
 #ifndef __cplusplus
-typedef uint32_t FilterTypeEnum;
+#if __STDC_VERSION__ >= 202311L
+typedef enum ImageFormatEnum ImageFormatEnum;
+#else
+typedef uint32_t ImageFormatEnum;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -47,9 +57,9 @@ typedef uint32_t FilterTypeEnum;
  * operations that don't return a handle.
  */
 enum ImageErrorCode
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint32_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
   /**
    * The operation succeeded.
@@ -93,49 +103,51 @@ enum ImageErrorCode
   Unknown = 99,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ImageErrorCode ImageErrorCode;
+#else
 typedef uint32_t ImageErrorCode;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
- * Image container format used for both decoding and encoding.
+ * Sampling filter used when resizing.
+ *
+ * Quality and cost roughly increase from top to bottom; `Lanczos3` is the
+ * default and produces the sharpest results, `Nearest` is the fastest.
  */
-enum ImageFormatEnum
-#ifdef __cplusplus
+enum FilterTypeEnum
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint32_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
   /**
-   * Portable Network Graphics — lossless, alpha supported.
+   * Nearest-neighbour. Fastest, blocky output. Good for pixel art.
    */
-  Png = 0,
+  Nearest = 0,
   /**
-   * JPEG — lossy, no alpha. Quality is configurable on encode.
+   * Linear (a.k.a. bilinear). Cheap, slightly blurry.
    */
-  Jpeg = 1,
+  Triangle = 1,
   /**
-   * Graphics Interchange Format — palette-based, supports animation
-   * (single-frame only via this API).
+   * Catmull-Rom cubic. Sharper than `Triangle`, can ring on edges.
    */
-  Gif = 2,
+  CatmullRom = 2,
   /**
-   * WebP — lossy or lossless, alpha supported.
+   * Gaussian. Soft output, useful for downscaling without aliasing.
    */
-  WebP = 3,
+  Gaussian = 3,
   /**
-   * Windows Bitmap — uncompressed, large files.
+   * Lanczos with `a = 3`. Highest quality, slowest. Default.
    */
-  Bmp = 4,
-  /**
-   * Windows Icon — multi-resolution container.
-   */
-  Ico = 5,
-  /**
-   * Tagged Image File Format — typically lossless.
-   */
-  Tiff = 6,
+  Lanczos3 = 4,
 };
 #ifndef __cplusplus
-typedef uint32_t ImageFormatEnum;
+#if __STDC_VERSION__ >= 202311L
+typedef enum FilterTypeEnum FilterTypeEnum;
+#else
+typedef uint32_t FilterTypeEnum;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 typedef struct ImageHandle {
@@ -146,6 +158,12 @@ typedef struct ImageMetadata {
   uint32_t width;
   uint32_t height;
   uint8_t color_type;
+  /**
+   * Matches [`ImageFormatEnum`]'s discriminants; `255` means the format
+   * is unknown or not applicable (e.g. metadata read from an already-
+   * decoded [`ImageHandle`], which no longer carries its source format).
+   */
+  uint8_t format;
 } ImageMetadata;
 
 #ifdef __cplusplus
@@ -206,6 +224,45 @@ struct ImageHandle *pixer_load_from_memory_with_format_and_error(const uint8_t *
                                                                  ImageErrorCode *out_error);
 
 /**
+ * Loads an image from memory, decoding at the smallest resolution that
+ * still covers `(target_width, target_height)` when the source is a JPEG.
+ *
+ * This exists for thumbnail generation: a JPEG's DCT structure lets the
+ * decoder skip reconstructing full resolution when the caller only needs a
+ * much smaller output, cutting decode memory and CPU roughly in proportion
+ * to the scaling factor chosen. Non-JPEG input, or any TurboJPEG failure,
+ * falls back transparently to the regular full decode.
+ */
+struct ImageHandle *pixer_load_scaled_from_memory_with_error(const uint8_t *data,
+                                                             uintptr_t len,
+                                                             uint32_t target_width,
+                                                             uint32_t target_height,
+                                                             ImageErrorCode *out_error);
+
+/**
+ * File-path counterpart of [`pixer_load_scaled_from_memory_with_error`].
+ */
+struct ImageHandle *pixer_load_scaled_from_file_with_error(const char *path,
+                                                           uint32_t target_width,
+                                                           uint32_t target_height,
+                                                           ImageErrorCode *out_error);
+
+/**
+ * Read image metadata from a file path without decoding pixel data
+ */
+ImageErrorCode pixer_read_metadata_from_file_with_error(const char *path,
+                                                        struct ImageMetadata *out_metadata,
+                                                        ImageErrorCode *out_error);
+
+/**
+ * Read image metadata from memory without decoding pixel data
+ */
+ImageErrorCode pixer_read_metadata_from_memory_with_error(const uint8_t *data,
+                                                          uintptr_t len,
+                                                          struct ImageMetadata *out_metadata,
+                                                          ImageErrorCode *out_error);
+
+/**
  * Save an image to a file path
  */
 ImageErrorCode pixer_save(const struct ImageHandle *handle, const char *path);
@@ -237,21 +294,6 @@ ImageErrorCode pixer_write_to_with_quality(const struct ImageHandle *handle,
  */
 ImageErrorCode pixer_get_metadata(const struct ImageHandle *handle,
                                   struct ImageMetadata *out_metadata);
-
-/**
- * Read image metadata from a file path without decoding pixel data.
- */
-ImageErrorCode pixer_read_metadata_from_file_with_error(const char *path,
-                                                        struct ImageMetadata *out_metadata,
-                                                        ImageErrorCode *out_error);
-
-/**
- * Read image metadata from memory without decoding pixel data.
- */
-ImageErrorCode pixer_read_metadata_from_memory_with_error(const uint8_t *data,
-                                                          uintptr_t len,
-                                                          struct ImageMetadata *out_metadata,
-                                                          ImageErrorCode *out_error);
 
 /**
  * Resize the image to fit *within* `width` x `height` while preserving

@@ -117,6 +117,23 @@ pub struct ImageMetadata {
     pub width: u32,
     pub height: u32,
     pub color_type: u8,
+    /// Matches [`ImageFormatEnum`]'s discriminants; `255` means the format
+    /// is unknown or not applicable (e.g. metadata read from an already-
+    /// decoded [`ImageHandle`], which no longer carries its source format).
+    pub format: u8,
+}
+
+fn format_to_code(format: ImageFormat) -> u8 {
+    match format {
+        ImageFormat::Png => ImageFormatEnum::Png as u8,
+        ImageFormat::Jpeg => ImageFormatEnum::Jpeg as u8,
+        ImageFormat::Gif => ImageFormatEnum::Gif as u8,
+        ImageFormat::WebP => ImageFormatEnum::WebP as u8,
+        ImageFormat::Bmp => ImageFormatEnum::Bmp as u8,
+        ImageFormat::Ico => ImageFormatEnum::Ico as u8,
+        ImageFormat::Tiff => ImageFormatEnum::Tiff as u8,
+        _ => 255,
+    }
 }
 
 fn with_image<R>(handle: *const ImageHandle, f: impl FnOnce(&DynamicImage) -> R) -> Option<R> {
@@ -184,6 +201,8 @@ fn get_metadata(img: &DynamicImage) -> ImageMetadata {
         width: img.width(),
         height: img.height(),
         color_type,
+        // `DynamicImage` doesn't retain the format it was decoded from.
+        format: 255,
     }
 }
 
@@ -191,6 +210,7 @@ fn read_metadata_from_reader<R: std::io::BufRead + std::io::Seek>(
     reader: ImageReader<R>,
 ) -> Result<ImageMetadata, ImageErrorCode> {
     let reader = reader.with_guessed_format().map_err(|_| ImageErrorCode::IoError)?;
+    let format = reader.format().map(format_to_code).unwrap_or(255);
     let (width, height) = reader
         .into_dimensions()
         .map_err(|e| error_to_code(&e))?;
@@ -201,6 +221,7 @@ fn read_metadata_from_reader<R: std::io::BufRead + std::io::Seek>(
         // image crate does not expose a generic header-only color type here, so
         // keep this conservative for callers that estimate decoded memory.
         color_type: 3,
+        format,
     })
 }
 
