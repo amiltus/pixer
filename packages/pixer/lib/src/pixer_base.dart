@@ -167,8 +167,9 @@ final class Pixer implements ffi.Finalizable {
   /// (equivalent to [Pixer.fromFile]).
   ///
   /// The returned image is not necessarily exactly `targetWidth` x
-  /// `targetHeight` — it covers at least that size; call [resize] or
-  /// [resizeExact] afterwards for the precise final dimensions.
+  /// `targetHeight` — it covers at least that size; call [resize]
+  /// afterwards (with `preserveAspectRatio: false` for exact final
+  /// dimensions) to get the precise size.
   ///
   /// Throws [InvalidPathException] if the path is empty or invalid.
   /// Throws [IoException] if the file cannot be read.
@@ -425,34 +426,28 @@ final class Pixer implements ffi.Finalizable {
     return encoder.encode(_handle);
   }
 
-  /// Resizes the image to fit *within* [width] x [height], preserving aspect
-  /// ratio.
+  /// Resizes the image to [width] x [height].
   ///
-  /// The result is at most [width] x [height]; the smaller dimension is
-  /// scaled proportionally so the image is never distorted. Use
-  /// [resizeExact] to force exact dimensions.
+  /// When [preserveAspectRatio] is `true` (the default), the image is
+  /// resized to fit *within* [width] x [height]: the result is at most that
+  /// size, with the smaller dimension scaled proportionally so the image is
+  /// never distorted. When `false`, the image is resized to exactly
+  /// [width] x [height], ignoring its original aspect ratio - this may
+  /// visibly stretch or squash it.
   ///
   /// Returns a new [Pixer] instance. The original is not modified.
-  Pixer resize(int width, int height,
-      {FilterTypeEnum filter = FilterTypeEnum.Lanczos3}) {
+  Pixer resize(
+    int width,
+    int height, {
+    bool preserveAspectRatio = true,
+    FilterTypeEnum filter = FilterTypeEnum.Lanczos3,
+  }) {
     _checkDisposed();
     _validateDimensions(width, height);
-    final handle = pixer_resize(_handle, width, height, filter.value);
+    final handle = preserveAspectRatio
+        ? pixer_resize(_handle, width, height, filter.value)
+        : pixer_resize_exact(_handle, width, height, filter.value);
     return _fromNativeHandle(handle, 'resize');
-  }
-
-  /// Resizes the image to exactly [width] x [height], ignoring aspect ratio.
-  ///
-  /// May visibly stretch or squash the image. See [resize] to preserve
-  /// aspect ratio.
-  ///
-  /// Returns a new [Pixer] instance. The original is not modified.
-  Pixer resizeExact(int width, int height,
-      {FilterTypeEnum filter = FilterTypeEnum.Lanczos3}) {
-    _checkDisposed();
-    _validateDimensions(width, height);
-    final handle = pixer_resize_exact(_handle, width, height, filter.value);
-    return _fromNativeHandle(handle, 'resizeExact');
   }
 
   /// Crops the image to the specified rectangle

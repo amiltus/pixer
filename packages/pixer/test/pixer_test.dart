@@ -966,5 +966,33 @@ void main() {
       expect(
           () => Pixer.fromMemory(invalidData), throwsA(isA<PixerException>()));
     });
+
+    test(
+      'resize with preserveAspectRatio: true (default) fits within bounds '
+      'without distorting a non-square source',
+      () {
+        final image = Pixer.fromMemory(_solidJpeg(200, 100));
+        final resized = image.resize(50, 50);
+        // 2:1 source fit within a 50x50 box: width is the limiting
+        // dimension, so height must shrink proportionally below 50.
+        expect(resized.width, equals(50));
+        expect(resized.height, lessThan(50));
+        expect(resized.width / resized.height, closeTo(2.0, 0.05));
+        resized.dispose();
+        image.dispose();
+      },
+    );
+
+    test(
+      'resize with preserveAspectRatio: false stretches to exact dimensions',
+      () {
+        final image = Pixer.fromMemory(_solidJpeg(200, 100));
+        final resized = image.resize(50, 50, preserveAspectRatio: false);
+        expect(resized.width, equals(50));
+        expect(resized.height, equals(50));
+        resized.dispose();
+        image.dispose();
+      },
+    );
   });
 }
