@@ -21,9 +21,14 @@ image = "0.25.5"
 libc = "0.2.177"
 turbojpeg = "1.4.0"
 png = "0.18.0"
+# Phase 5 validation spike only (decode_bench, behind the `bench` feature) -
+# not linked into the real staticlib/cdylib, and not wired into ffi.rs,
+# until the spike clears its kill criterion (>=2x peak RSS win over full
+# decode). See decode_bench.rs's webp-scaled mode.
+libwebp-sys = { version = "0.14", optional = true }
 
 [features]
-bench = []
+bench = ["dep:libwebp-sys"]
 
 [profile.release]
 opt-level = 3

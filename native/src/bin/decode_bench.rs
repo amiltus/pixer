@@ -6,6 +6,11 @@
 //                  pixer_load_scaled_from_memory_with_error/_from_file_with_error
 //                  in production (JPEG or PNG, whichever matches), then the
 //                  same final .resize() for the exact target
+//   webp-scaled  - Phase 5 validation spike: libwebp's own WebPDecoderConfig
+//                  scaling (options.use_scaling/scaled_width/scaled_height),
+//                  NOT yet wired into ffi.rs - this is purely to measure
+//                  whether it's worth doing so. Compare against `full` on
+//                  the same .webp file for the real win/no-win answer.
 //
 // Run each mode in its own process (so peak RSS reflects only that mode)
 // under `/usr/bin/time -l` to get real, measured wall time and peak memory,
@@ -16,8 +21,10 @@
 //   cargo build --release --features bench --bin decode_bench
 //   /usr/bin/time -l ./target/release/decode_bench full        <path> <w> <h>
 //   /usr/bin/time -l ./target/release/decode_bench scaled-real <path> <w> <h>
+//   /usr/bin/time -l ./target/release/decode_bench webp-scaled <path.webp> <w> <h>
 
 use image::{DynamicImage, imageops::FilterType};
+use libwebp_sys::{VP8StatusCode, WEBP_CSP_MODE, WebPDecode, WebPFreeDecBuffer, WebPGetFeatures};
 use pixer::ffi::try_decode_scaled;
 use std::time::Instant;
 
@@ -163,6 +170,65 @@ fn decode_png_streaming(path: &str, target_w: u32, target_h: u32) -> DynamicImag
     intermediate.resize_exact(final_w, final_h, FilterType::Lanczos3)
 }
 
+/// Phase 5 validation spike: decodes a WebP directly to `(target_w,
+/// target_h)`-covering resolution via libwebp's own `WebPDecoderConfig`
+/// scaling option, instead of decoding at full resolution first. Frees the
+/// output via `WebPFreeDecBuffer` (the exact bug a prior third-party
+/// proposal got wrong - `free()` instead of the buffer's own destructor,
+/// which would corrupt libwebp's internal allocator state since the buffer
+/// isn't necessarily a bare `malloc` region).
+fn decode_webp_scaled(bytes: &[u8], target_w: u32, target_h: u32) -> DynamicImage {
+    unsafe {
+        let mut config = libwebp_sys::WebPDecoderConfig::new()
+            .expect("WebPInitDecoderConfig failed (ABI version mismatch)");
+
+        let status = WebPGetFeatures(bytes.as_ptr(), bytes.len(), &mut config.input);
+        assert_eq!(status, VP8StatusCode::VP8_STATUS_OK, "WebPGetFeatures failed");
+        let src_width = config.input.width as u32;
+        let src_height = config.input.height as u32;
+
+        // Same "smallest scale that still covers the target" idea as the
+        // JPEG eighths, but libwebp takes an exact pixel size rather than a
+        // fixed set of factors.
+        let needed = f64::min(
+            1.0,
+            f64::max(
+                target_w as f64 / src_width as f64,
+                target_h as f64 / src_height as f64,
+            ),
+        );
+        let scaled_w = ((src_width as f64 * needed).round() as i32).max(1);
+        let scaled_h = ((src_height as f64 * needed).round() as i32).max(1);
+        config.options.use_scaling = 1;
+        config.options.scaled_width = scaled_w;
+        config.options.scaled_height = scaled_h;
+        config.output.colorspace = WEBP_CSP_MODE::MODE_RGB;
+
+        let status = WebPDecode(bytes.as_ptr(), bytes.len(), &mut config);
+        assert_eq!(status, VP8StatusCode::VP8_STATUS_OK, "WebPDecode failed");
+
+        let width = config.output.width as usize;
+        let height = config.output.height as usize;
+        let rgba_buf = config.output.u.RGBA;
+        let stride = rgba_buf.stride as usize;
+        let channels = 3usize;
+
+        // The output buffer's rows are `stride`-padded, not tightly packed,
+        // so copy row-by-row into a tightly-packed buffer for `image` to own.
+        let mut pixels = vec![0u8; width * height * channels];
+        for y in 0..height {
+            let src_row = std::slice::from_raw_parts(rgba_buf.rgba.add(y * stride), width * channels);
+            let dst_start = y * width * channels;
+            pixels[dst_start..dst_start + width * channels].copy_from_slice(src_row);
+        }
+
+        WebPFreeDecBuffer(&mut config.output);
+
+        eprintln!("  webp-scaled decoded to: {width}x{height} (source {src_width}x{src_height})");
+        DynamicImage::ImageRgb8(image::RgbImage::from_raw(width as u32, height as u32, pixels).unwrap())
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = &args[1];
@@ -184,6 +250,7 @@ fn main() {
         // stand in for before that code existed in ffi.rs.
         "scaled-real" => try_decode_scaled(&bytes, target_w, target_h)
             .unwrap_or_else(|| panic!("try_decode_scaled returned None for {path} - not a JPEG/PNG it can fast-path, or decode failed")),
+        "webp-scaled" => decode_webp_scaled(&bytes, target_w, target_h),
         other => panic!("unknown mode: {other}"),
     };
     let t_decode = t0.elapsed();
