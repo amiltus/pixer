@@ -4,13 +4,16 @@
 //   png-streaming - standalone reimplementation of PNG scanline streaming
 //   scaled-real  - the actual ffi::try_decode_scaled dispatch used by
 //                  pixer_load_scaled_from_memory_with_error/_from_file_with_error
-//                  in production (JPEG or PNG, whichever matches), then the
-//                  same final .resize() for the exact target
-//   webp-scaled  - Phase 5 validation spike: libwebp's own WebPDecoderConfig
-//                  scaling (options.use_scaling/scaled_width/scaled_height),
-//                  NOT yet wired into ffi.rs - this is purely to measure
-//                  whether it's worth doing so. Compare against `full` on
-//                  the same .webp file for the real win/no-win answer.
+//                  in production (JPEG, PNG, or WebP, whichever matches),
+//                  then the same final .resize() for the exact target
+//   webp-scaled  - Phase 5's original validation-spike implementation of
+//                  libwebp's own WebPDecoderConfig scaling, kept standalone
+//                  for direct before/after comparison against `full` on the
+//                  same .webp file. The graduated production version lives
+//                  in ffi::try_decode_scaled_webp (exercised via
+//                  `scaled-real` above) - this one predates the animated/
+//                  alpha handling and always-free-on-every-path fixes added
+//                  when it graduated, so don't treat it as the real path.
 //
 // Run each mode in its own process (so peak RSS reflects only that mode)
 // under `/usr/bin/time -l` to get real, measured wall time and peak memory,

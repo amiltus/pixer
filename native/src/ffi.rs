@@ -2,6 +2,7 @@ use image::{
     DynamicImage, ImageError, ImageFormat, ImageReader, codecs::jpeg::JpegEncoder,
     imageops::FilterType,
 };
+use libwebp_sys::{VP8StatusCode, WEBP_CSP_MODE, WebPDecode, WebPFreeDecBuffer, WebPGetFeatures};
 use turbojpeg::{Decompressor, Image as TjImage, PixelFormat, ScalingFactor};
 use std::{
     ffi::{CStr, CString},
@@ -461,6 +462,10 @@ fn is_png_magic(bytes: &[u8]) -> bool {
     bytes.len() >= 8 && bytes[..8] == PNG_SIGNATURE
 }
 
+fn is_webp_magic(bytes: &[u8]) -> bool {
+    bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
+}
+
 /// Attempts a decode-time-downscaled PNG load by streaming scanlines via
 /// `png::Reader::next_row` and box-downsampling both axes on the fly,
 /// discarding each source row immediately after - never materialising more
@@ -570,10 +575,110 @@ fn try_decode_scaled_png<R: std::io::BufRead + std::io::Seek>(
     }
 }
 
+/// Attempts a decode-time-downscaled WebP load via libwebp's own
+/// `WebPDecoderConfig.options.use_scaling`, which decodes directly to the
+/// requested resolution rather than decoding at full resolution first (Phase
+/// 5's validation spike measured 84x/19x peak-RSS wins and 6-7x speed wins
+/// over full decode, decisively clearing the 2x kill criterion).
+///
+/// Returns `None` (falling back to the general-purpose full decode) for:
+/// animated WebP (a single-frame scaled decode would silently drop the
+/// animation, unlike the full-decode path's existing behavior), a target
+/// that doesn't require shrinking below source resolution (no benefit over
+/// the general path), or any libwebp failure (corrupt/truncated bitstream,
+/// zero-sized source).
+///
+/// `config.output`'s buffer is freed via `WebPFreeDecBuffer` on every path
+/// once `WebPDecode` has been called, success or failure - libwebp may
+/// partially allocate the output buffer before failing partway through a
+/// truncated bitstream, and freeing it with a bare `free()` instead (a bug
+/// caught in an earlier third-party proposal) would corrupt libwebp's
+/// internal allocator state since the buffer isn't necessarily a bare
+/// `malloc` region.
+fn try_decode_scaled_webp(bytes: &[u8], target_width: u32, target_height: u32) -> Option<DynamicImage> {
+    unsafe {
+        let mut config = libwebp_sys::WebPDecoderConfig::new().ok()?;
+
+        if WebPGetFeatures(bytes.as_ptr(), bytes.len(), &mut config.input)
+            != VP8StatusCode::VP8_STATUS_OK
+        {
+            return None;
+        }
+        if config.input.has_animation != 0 {
+            return None;
+        }
+        let src_width = config.input.width as u32;
+        let src_height = config.input.height as u32;
+        if src_width == 0 || src_height == 0 || target_width == 0 || target_height == 0 {
+            return None;
+        }
+
+        let needed = f64::min(
+            1.0,
+            f64::max(
+                target_width as f64 / src_width as f64,
+                target_height as f64 / src_height as f64,
+            ),
+        );
+        if needed >= 1.0 {
+            // Wouldn't shrink at all - let the general path handle it, same
+            // convention as try_decode_scaled_png's "barely shrinks" bail.
+            return None;
+        }
+        let scaled_w = ((src_width as f64 * needed).round() as i32).max(1);
+        let scaled_h = ((src_height as f64 * needed).round() as i32).max(1);
+        config.options.use_scaling = 1;
+        config.options.scaled_width = scaled_w;
+        config.options.scaled_height = scaled_h;
+
+        let has_alpha = config.input.has_alpha != 0;
+        config.output.colorspace = if has_alpha {
+            WEBP_CSP_MODE::MODE_RGBA
+        } else {
+            WEBP_CSP_MODE::MODE_RGB
+        };
+
+        let status = WebPDecode(bytes.as_ptr(), bytes.len(), &mut config);
+        let result = if status == VP8StatusCode::VP8_STATUS_OK {
+            let width = config.output.width as usize;
+            let height = config.output.height as usize;
+            let rgba_buf = config.output.u.RGBA;
+            let stride = rgba_buf.stride as usize;
+            let channels = if has_alpha { 4usize } else { 3usize };
+
+            // The output buffer's rows are `stride`-padded, not tightly
+            // packed, so copy row-by-row into a tightly-packed buffer.
+            let mut pixels = vec![0u8; width * height * channels];
+            for y in 0..height {
+                let src_row =
+                    slice::from_raw_parts(rgba_buf.rgba.add(y * stride), width * channels);
+                let dst_start = y * width * channels;
+                pixels[dst_start..dst_start + width * channels].copy_from_slice(src_row);
+            }
+
+            if has_alpha {
+                image::RgbaImage::from_raw(width as u32, height as u32, pixels)
+                    .map(DynamicImage::ImageRgba8)
+            } else {
+                image::RgbImage::from_raw(width as u32, height as u32, pixels)
+                    .map(DynamicImage::ImageRgb8)
+            }
+        } else {
+            None
+        };
+
+        // Free unconditionally: WebPDecode may have allocated config.output's
+        // buffer even on a status other than VP8_STATUS_OK.
+        WebPFreeDecBuffer(&mut config.output);
+        result
+    }
+}
+
 /// Dispatches to whichever decode-time-downscaled path matches `bytes`'
 /// format - JPEG via TurboJPEG's DCT scaling, PNG via streaming scanline
-/// box-downsampling - or `None` for any other format or on failure, so
-/// callers can fall back to the general-purpose full decode transparently.
+/// box-downsampling, WebP via libwebp's own scaled decode - or `None` for
+/// any other format or on failure, so callers can fall back to the
+/// general-purpose full decode transparently.
 ///
 /// `pub` only so `decode_bench` can measure the exact real code path used
 /// by `pixer_load_scaled_from_memory_with_error`/`_from_file_with_error`.
@@ -583,6 +688,9 @@ pub fn try_decode_scaled(bytes: &[u8], target_width: u32, target_height: u32) ->
     }
     if is_png_magic(bytes) {
         return try_decode_scaled_png(Cursor::new(bytes), target_width, target_height);
+    }
+    if is_webp_magic(bytes) {
+        return try_decode_scaled_webp(bytes, target_width, target_height);
     }
     None
 }
@@ -1135,5 +1243,163 @@ mod tests {
     #[test]
     fn dispatch_ignores_non_png_non_jpeg_bytes() {
         assert!(try_decode_scaled(b"not an image", 50, 50).is_none());
+    }
+
+    /// Wraps `tag`+length-prefixed `data` as a RIFF sub-chunk, padding with a
+    /// zero byte if `data` has odd length (RIFF chunks are 16-bit aligned).
+    fn build_riff_chunk(tag: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::with_capacity(8 + data.len() + 1);
+        chunk.extend_from_slice(tag);
+        chunk.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            chunk.push(0);
+        }
+        chunk
+    }
+
+    /// Encodes a synthetic single-frame WebP via libwebp's own one-shot
+    /// encoder, for exercising `try_decode_scaled_webp` without needing
+    /// checked-in binary fixtures. Pixel content is an arbitrary varying
+    /// fill - these tests only care about dimensions/color type.
+    fn encode_test_webp_rgb(width: u32, height: u32) -> Vec<u8> {
+        let stride = width as usize * 3;
+        let pixels: Vec<u8> = (0..stride * height as usize).map(|i| (i % 200 + 20) as u8).collect();
+        let mut out: *mut u8 = std::ptr::null_mut();
+        let len = unsafe {
+            libwebp_sys::WebPEncodeRGB(
+                pixels.as_ptr(),
+                width as i32,
+                height as i32,
+                stride as i32,
+                75.0,
+                &mut out,
+            )
+        };
+        assert!(len > 0 && !out.is_null(), "WebPEncodeRGB failed");
+        let bytes = unsafe { slice::from_raw_parts(out, len) }.to_vec();
+        unsafe { libwebp_sys::WebPFree(out as *mut _) };
+        bytes
+    }
+
+    fn encode_test_webp_rgba(width: u32, height: u32) -> Vec<u8> {
+        let stride = width as usize * 4;
+        let pixels: Vec<u8> = (0..stride * height as usize)
+            .map(|i| if i % 4 == 3 { 128 } else { (i % 200 + 20) as u8 })
+            .collect();
+        let mut out: *mut u8 = std::ptr::null_mut();
+        let len = unsafe {
+            libwebp_sys::WebPEncodeRGBA(
+                pixels.as_ptr(),
+                width as i32,
+                height as i32,
+                stride as i32,
+                75.0,
+                &mut out,
+            )
+        };
+        assert!(len > 0 && !out.is_null(), "WebPEncodeRGBA failed");
+        let bytes = unsafe { slice::from_raw_parts(out, len) }.to_vec();
+        unsafe { libwebp_sys::WebPFree(out as *mut _) };
+        bytes
+    }
+
+    /// Hand-assembles a minimal spec-compliant single-frame *animated* WebP
+    /// (VP8X with the animation bit set, an ANIM chunk, and one ANMF frame
+    /// wrapping a real encoded VP8 bitstream) - `libwebp-sys` only exposes
+    /// the low-level `WebPAnimEncoder*` C API, and hand-building the
+    /// container directly is simpler than wiring that up correctly for a
+    /// single test fixture.
+    fn encode_test_animated_webp(width: u32, height: u32) -> Vec<u8> {
+        let single_frame = encode_test_webp_rgb(width, height);
+        // single_frame is a full RIFF file: "RIFF" + size(4) + "WEBP" + the
+        // "VP8 " sub-chunk (tag+size+data[+pad]) - everything from byte 12
+        // onward *is* that sub-chunk, ready to embed inside an ANMF frame.
+        let vp8_chunk = single_frame[12..].to_vec();
+
+        let w_minus1 = (width - 1).to_le_bytes();
+        let h_minus1 = (height - 1).to_le_bytes();
+
+        let mut anmf_payload = Vec::new();
+        anmf_payload.extend_from_slice(&[0, 0, 0]); // frame x
+        anmf_payload.extend_from_slice(&[0, 0, 0]); // frame y
+        anmf_payload.extend_from_slice(&w_minus1[..3]);
+        anmf_payload.extend_from_slice(&h_minus1[..3]);
+        anmf_payload.extend_from_slice(&100u32.to_le_bytes()[..3]); // duration (ms)
+        anmf_payload.push(0); // reserved + blending/dispose flags
+        anmf_payload.extend_from_slice(&vp8_chunk);
+        let anmf_chunk = build_riff_chunk(b"ANMF", &anmf_payload);
+
+        let mut vp8x_payload = Vec::new();
+        vp8x_payload.push(0x02); // bit 1: has-animation
+        vp8x_payload.extend_from_slice(&[0, 0, 0]); // reserved
+        vp8x_payload.extend_from_slice(&w_minus1[..3]);
+        vp8x_payload.extend_from_slice(&h_minus1[..3]);
+        let vp8x_chunk = build_riff_chunk(b"VP8X", &vp8x_payload);
+
+        let mut anim_payload = Vec::new();
+        anim_payload.extend_from_slice(&[0, 0, 0, 0]); // background color
+        anim_payload.extend_from_slice(&1u16.to_le_bytes()); // loop count
+        let anim_chunk = build_riff_chunk(b"ANIM", &anim_payload);
+
+        let mut body = Vec::new();
+        body.extend_from_slice(b"WEBP");
+        body.extend_from_slice(&vp8x_chunk);
+        body.extend_from_slice(&anim_chunk);
+        body.extend_from_slice(&anmf_chunk);
+
+        let mut file = Vec::new();
+        file.extend_from_slice(b"RIFF");
+        file.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        file.extend_from_slice(&body);
+        file
+    }
+
+    #[test]
+    fn scaled_webp_streams_rgb() {
+        let bytes = encode_test_webp_rgb(400, 200);
+        let img = try_decode_scaled_webp(&bytes, 50, 25)
+            .expect("non-animated RGB WebP should use the scaled decode path");
+        assert!(img.width() <= 400 && img.width() >= 50);
+        assert!(img.height() <= 200 && img.height() >= 25);
+        assert_eq!(img.color(), image::ColorType::Rgb8);
+    }
+
+    #[test]
+    fn scaled_webp_streams_rgba_when_source_has_alpha() {
+        let bytes = encode_test_webp_rgba(400, 200);
+        let img = try_decode_scaled_webp(&bytes, 50, 25)
+            .expect("non-animated RGBA WebP should use the scaled decode path");
+        assert_eq!(img.color(), image::ColorType::Rgba8);
+    }
+
+    #[test]
+    fn scaled_webp_returns_none_when_target_not_smaller() {
+        let bytes = encode_test_webp_rgb(100, 100);
+        assert!(try_decode_scaled_webp(&bytes, 200, 200).is_none());
+        assert!(try_decode_scaled_webp(&bytes, 100, 100).is_none());
+    }
+
+    #[test]
+    fn scaled_webp_falls_back_for_animation() {
+        let bytes = encode_test_animated_webp(64, 32);
+        assert!(
+            try_decode_scaled_webp(&bytes, 16, 16).is_none(),
+            "scaled decode must decline animated WebP rather than silently dropping frames"
+        );
+        assert!(
+            try_decode_scaled(&bytes, 16, 16).is_none(),
+            "dispatch must also decline via the general try_decode_scaled entry point"
+        );
+        let full = image::load_from_memory(&bytes)
+            .expect("fallback full decode must still succeed for animated WebP");
+        assert_eq!((full.width(), full.height()), (64, 32));
+    }
+
+    #[test]
+    fn dispatch_recognizes_webp_magic() {
+        let bytes = encode_test_webp_rgb(400, 200);
+        let img = try_decode_scaled(&bytes, 50, 25).expect("dispatch should route WebP bytes to the scaled WebP path");
+        assert!(img.width() <= 400 && img.height() <= 200);
     }
 }

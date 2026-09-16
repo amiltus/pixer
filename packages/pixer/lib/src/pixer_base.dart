@@ -155,16 +155,20 @@ final class Pixer implements ffi.Finalizable {
 
   /// Loads an image from a file path, decoding at the smallest resolution
   /// that still covers `(targetWidth, targetHeight)` when the source is a
-  /// JPEG.
+  /// JPEG, PNG, or WebP.
   ///
   /// For a JPEG, this uses the decoder's DCT-scaling support to skip
   /// reconstructing full resolution when the caller only needs a much
   /// smaller output, cutting decode memory and CPU roughly in proportion to
   /// the scaling factor chosen — the win is largest for baseline JPEGs;
   /// progressive JPEGs still need their coefficient buffer at full
-  /// resolution, so the benefit is smaller there. Any other format, or a
-  /// TurboJPEG failure, falls back transparently to a regular full decode
-  /// (equivalent to [Pixer.fromFile]).
+  /// resolution, so the benefit is smaller there. PNG uses scanline
+  /// streaming (8-bit non-interlaced RGB/RGBA only; other PNGs fall back to
+  /// a full decode). WebP uses libwebp's own decode-time scaling (single-
+  /// frame only; animated WebP falls back to a full decode so no frames are
+  /// silently dropped). Any other format, or a decode failure in the
+  /// above, falls back transparently to a regular full decode (equivalent
+  /// to [Pixer.fromFile]).
   ///
   /// The returned image is not necessarily exactly `targetWidth` x
   /// `targetHeight` — it covers at least that size; call [resize]
