@@ -40,7 +40,8 @@ final class Pixer implements ffi.Finalizable {
   }
 
   static final _finalizer = ffi.NativeFinalizer(
-    ffi.Native.addressOf<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ImageHandle>)>>(
+    ffi.Native.addressOf<
+        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ImageHandle>)>>(
       pixer_free,
     ).cast(),
   );
@@ -50,7 +51,8 @@ final class Pixer implements ffi.Finalizable {
   PixerMetadata? _cachedMetadata;
 
   static int _estimateExternalSize(ffi.Pointer<ImageHandle> handle) {
-    final metadataPtr = malloc.allocate<ImageMetadata>(ffi.sizeOf<ImageMetadata>());
+    final metadataPtr =
+        malloc.allocate<ImageMetadata>(ffi.sizeOf<ImageMetadata>());
     try {
       final errorCode = pixer_get_metadata(handle, metadataPtr);
       if (errorCode != 0) return 0;
@@ -108,7 +110,8 @@ final class Pixer implements ffi.Finalizable {
     final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
     try {
       dataPtr.asTypedList(data.length).setAll(0, data);
-      final handle = pixer_load_from_memory_with_error(dataPtr, data.length, errorPtr);
+      final handle =
+          pixer_load_from_memory_with_error(dataPtr, data.length, errorPtr);
       if (handle == ffi.nullptr) {
         final errorCode = ImageErrorCode.fromValue(errorPtr.value);
         throw PixerException.fromCode(errorCode, context: 'input: memory');
@@ -140,11 +143,177 @@ final class Pixer implements ffi.Finalizable {
       );
       if (handle == ffi.nullptr) {
         final errorCode = ImageErrorCode.fromValue(errorPtr.value);
-        throw PixerException.fromCode(errorCode, context: 'input: memory, format: ${format.name}');
+        throw PixerException.fromCode(errorCode,
+            context: 'input: memory, format: ${format.name}');
       }
       return Pixer._(handle);
     } finally {
       malloc.free(dataPtr);
+      malloc.free(errorPtr);
+    }
+  }
+
+  /// Loads an image from a file path, decoding at the smallest resolution
+  /// that still covers `(targetWidth, targetHeight)` when the source is a
+  /// JPEG, PNG, or WebP.
+  ///
+  /// For a JPEG, this uses the decoder's DCT-scaling support to skip
+  /// reconstructing full resolution when the caller only needs a much
+  /// smaller output, cutting decode memory and CPU roughly in proportion to
+  /// the scaling factor chosen — the win is largest for baseline JPEGs;
+  /// progressive JPEGs still need their coefficient buffer at full
+  /// resolution, so the benefit is smaller there. PNG uses scanline
+  /// streaming (8-bit non-interlaced RGB/RGBA only; other PNGs fall back to
+  /// a full decode). WebP uses libwebp's own decode-time scaling (single-
+  /// frame only; animated WebP falls back to a full decode so no frames are
+  /// silently dropped). Any other format, or a decode failure in the
+  /// above, falls back transparently to a regular full decode (equivalent
+  /// to [Pixer.fromFile]).
+  ///
+  /// The returned image is not necessarily exactly `targetWidth` x
+  /// `targetHeight` — it covers at least that size; call [resize]
+  /// afterwards (with `preserveAspectRatio: false` for exact final
+  /// dimensions) to get the precise size.
+  ///
+  /// Throws [InvalidPathException] if the path is empty or invalid.
+  /// Throws [IoException] if the file cannot be read.
+  /// Throws [DecodingException] if the image format cannot be decoded.
+  /// Throws [UnsupportedFormatException] if the format is not supported.
+  factory Pixer.loadScaledFromFile(
+    String path, {
+    required int targetWidth,
+    required int targetHeight,
+  }) {
+    if (path.trim().isEmpty) {
+      throw InvalidPathException('path is empty');
+    }
+    _validateTargetDimensions(targetWidth, targetHeight);
+    final pathPtr = path.toNativeUtf8();
+    final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
+    try {
+      final handle = pixer_load_scaled_from_file_with_error(
+        pathPtr.cast(),
+        targetWidth,
+        targetHeight,
+        errorPtr,
+      );
+      if (handle == ffi.nullptr) {
+        final errorCode = ImageErrorCode.fromValue(errorPtr.value);
+        throw PixerException.fromCode(errorCode, context: 'path: $path');
+      }
+      return Pixer._(handle);
+    } finally {
+      malloc.free(pathPtr);
+      malloc.free(errorPtr);
+    }
+  }
+
+  /// Loads an image from a byte buffer, decoding at the smallest resolution
+  /// that still covers `(targetWidth, targetHeight)` when the source is a
+  /// JPEG.
+  ///
+  /// See [Pixer.loadScaledFromFile] for the full behavior; this is its
+  /// in-memory counterpart.
+  ///
+  /// Throws [DecodingException] if the buffer is empty or cannot be decoded.
+  /// Throws [UnsupportedFormatException] if the format is not supported.
+  factory Pixer.loadScaledFromMemory(
+    Uint8List data, {
+    required int targetWidth,
+    required int targetHeight,
+  }) {
+    if (data.isEmpty) {
+      throw DecodingException('input buffer is empty');
+    }
+    _validateTargetDimensions(targetWidth, targetHeight);
+    final dataPtr = malloc.allocate<ffi.Uint8>(data.length);
+    final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
+    try {
+      dataPtr.asTypedList(data.length).setAll(0, data);
+      final handle = pixer_load_scaled_from_memory_with_error(
+        dataPtr,
+        data.length,
+        targetWidth,
+        targetHeight,
+        errorPtr,
+      );
+      if (handle == ffi.nullptr) {
+        final errorCode = ImageErrorCode.fromValue(errorPtr.value);
+        throw PixerException.fromCode(errorCode, context: 'input: memory');
+      }
+      return Pixer._(handle);
+    } finally {
+      malloc.free(dataPtr);
+      malloc.free(errorPtr);
+    }
+  }
+
+  static void _validateTargetDimensions(int targetWidth, int targetHeight) {
+    if (targetWidth <= 0 || targetHeight <= 0) {
+      throw InvalidDimensionsException(
+          'targetWidth and targetHeight must be > 0');
+    }
+  }
+
+  /// Reads image metadata from a file path without decoding pixel data.
+  ///
+  /// This is intended for admission checks before loading very large images.
+  static PixerMetadata readMetadataFromFile(String path) {
+    if (path.trim().isEmpty) {
+      throw InvalidPathException('path is empty');
+    }
+    final pathPtr = path.toNativeUtf8();
+    final metadataPtr = malloc.allocate<ImageMetadata>(
+      ffi.sizeOf<ImageMetadata>(),
+    );
+    final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
+    try {
+      final errorCode = pixer_read_metadata_from_file_with_error(
+        pathPtr.cast(),
+        metadataPtr,
+        errorPtr,
+      );
+      final error = _errorFromValue(errorCode);
+      if (error != ImageErrorCode.Success) {
+        throw PixerException.fromCode(error, context: 'path: $path');
+      }
+      return PixerMetadata.fromNative(metadataPtr);
+    } finally {
+      malloc.free(pathPtr);
+      malloc.free(metadataPtr);
+      malloc.free(errorPtr);
+    }
+  }
+
+  /// Reads image metadata from a byte buffer without decoding pixel data.
+  ///
+  /// This copies the compressed input bytes across FFI, but avoids allocating
+  /// the decoded pixel buffer.
+  static PixerMetadata readMetadataFromMemory(Uint8List data) {
+    if (data.isEmpty) {
+      throw DecodingException('input buffer is empty');
+    }
+    final dataPtr = malloc.allocate<ffi.Uint8>(data.length);
+    final metadataPtr = malloc.allocate<ImageMetadata>(
+      ffi.sizeOf<ImageMetadata>(),
+    );
+    final errorPtr = malloc.allocate<ffi.Uint32>(ffi.sizeOf<ffi.Uint32>());
+    try {
+      dataPtr.asTypedList(data.length).setAll(0, data);
+      final errorCode = pixer_read_metadata_from_memory_with_error(
+        dataPtr,
+        data.length,
+        metadataPtr,
+        errorPtr,
+      );
+      final error = _errorFromValue(errorCode);
+      if (error != ImageErrorCode.Success) {
+        throw PixerException.fromCode(error, context: 'input: memory');
+      }
+      return PixerMetadata.fromNative(metadataPtr);
+    } finally {
+      malloc.free(dataPtr);
+      malloc.free(metadataPtr);
       malloc.free(errorPtr);
     }
   }
@@ -158,7 +327,8 @@ final class Pixer implements ffi.Finalizable {
 
   void _validateDimensions(int width, int height, {String? context}) {
     if (width <= 0 || height <= 0) {
-      throw InvalidDimensionsException(context ?? 'width and height must be > 0');
+      throw InvalidDimensionsException(
+          context ?? 'width and height must be > 0');
     }
   }
 
@@ -166,7 +336,8 @@ final class Pixer implements ffi.Finalizable {
     if (x < 0 || y < 0) {
       throw InvalidDimensionsException('x and y must be >= 0');
     }
-    _validateDimensions(width, height, context: 'crop width and height must be > 0');
+    _validateDimensions(width, height,
+        context: 'crop width and height must be > 0');
 
     // Bounds validation
     final meta = getMetadata();
@@ -189,7 +360,7 @@ final class Pixer implements ffi.Finalizable {
     return Pixer._(handle);
   }
 
-  ImageErrorCode _errorFromValue(int value) {
+  static ImageErrorCode _errorFromValue(int value) {
     try {
       return ImageErrorCode.fromValue(value);
     } on ArgumentError {
@@ -205,7 +376,8 @@ final class Pixer implements ffi.Finalizable {
     _checkDisposed();
     if (_cachedMetadata != null) return _cachedMetadata!;
 
-    final metadataPtr = malloc.allocate<ImageMetadata>(ffi.sizeOf<ImageMetadata>());
+    final metadataPtr =
+        malloc.allocate<ImageMetadata>(ffi.sizeOf<ImageMetadata>());
     try {
       final errorCode = pixer_get_metadata(_handle, metadataPtr);
       final error = _errorFromValue(errorCode);
@@ -258,32 +430,28 @@ final class Pixer implements ffi.Finalizable {
     return encoder.encode(_handle);
   }
 
-  /// Resizes the image to fit *within* [width] x [height], preserving aspect
-  /// ratio.
+  /// Resizes the image to [width] x [height].
   ///
-  /// The result is at most [width] x [height]; the smaller dimension is
-  /// scaled proportionally so the image is never distorted. Use
-  /// [resizeExact] to force exact dimensions.
+  /// When [preserveAspectRatio] is `true` (the default), the image is
+  /// resized to fit *within* [width] x [height]: the result is at most that
+  /// size, with the smaller dimension scaled proportionally so the image is
+  /// never distorted. When `false`, the image is resized to exactly
+  /// [width] x [height], ignoring its original aspect ratio - this may
+  /// visibly stretch or squash it.
   ///
   /// Returns a new [Pixer] instance. The original is not modified.
-  Pixer resize(int width, int height, {FilterTypeEnum filter = FilterTypeEnum.Lanczos3}) {
+  Pixer resize(
+    int width,
+    int height, {
+    bool preserveAspectRatio = true,
+    FilterTypeEnum filter = FilterTypeEnum.Lanczos3,
+  }) {
     _checkDisposed();
     _validateDimensions(width, height);
-    final handle = pixer_resize(_handle, width, height, filter.value);
+    final handle = preserveAspectRatio
+        ? pixer_resize(_handle, width, height, filter.value)
+        : pixer_resize_exact(_handle, width, height, filter.value);
     return _fromNativeHandle(handle, 'resize');
-  }
-
-  /// Resizes the image to exactly [width] x [height], ignoring aspect ratio.
-  ///
-  /// May visibly stretch or squash the image. See [resize] to preserve
-  /// aspect ratio.
-  ///
-  /// Returns a new [Pixer] instance. The original is not modified.
-  Pixer resizeExact(int width, int height, {FilterTypeEnum filter = FilterTypeEnum.Lanczos3}) {
-    _checkDisposed();
-    _validateDimensions(width, height);
-    final handle = pixer_resize_exact(_handle, width, height, filter.value);
-    return _fromNativeHandle(handle, 'resizeExact');
   }
 
   /// Crops the image to the specified rectangle

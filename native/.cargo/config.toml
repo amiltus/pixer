@@ -9,3 +9,21 @@ linker = "riscv64-linux-gnu-gcc"
 
 [target.i686-unknown-linux-gnu]
 linker = "i686-linux-gnu-gcc"
+
+[env]
+# Only takes effect for a plain `cargo build` run directly from this
+# directory (e.g. ad-hoc `decode_bench` testing) - Cargo discovers config
+# files starting from the process's current directory, and the real asset
+# pipeline invokes cargo from packages/pixer/ with --manifest-path pointing
+# here, so it never sees this file. That path gets the same fix via
+# `extraCargoEnvironmentVariables` in lib/src/hook/local_build.dart instead.
+#
+# turbojpeg-sys builds libjpeg-turbo from source via CMake, which lets clang
+# default to whatever iOS SDK is installed (e.g. 26.5) instead of the actual
+# minimum iOS version Rust's own target triple links against (10.0 unless
+# overridden). A large enough C stack frame (fill_inverse_cmap in
+# libjpeg-turbo's jquant2.c) then gets compiled with a stack probe
+# (___chkstk_darwin) that doesn't exist at the older version, and the final
+# link fails with an undefined symbol. Matches iOSTargetVersion in
+# lib/src/hook/target_versions.dart. Harmless on non-Apple targets.
+IPHONEOS_DEPLOYMENT_TARGET = "16"

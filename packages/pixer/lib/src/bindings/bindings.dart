@@ -13,7 +13,9 @@ import 'dart:ffi' as ffi;
 external void pixer_free_string(ffi.Pointer<ffi.Char> ptr);
 
 /// Free image data buffer
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr)>(isLeaf: true)
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr)>(
+  isLeaf: true,
+)
 external void pixer_free_buffer(ffi.Pointer<ffi.Uint8> ptr, int len);
 
 /// Free an image handle
@@ -26,12 +28,21 @@ external void pixer_free(ffi.Pointer<ImageHandle> handle);
 external ffi.Pointer<ImageHandle> pixer_load(ffi.Pointer<ffi.Char> path);
 
 /// Load an image from memory buffer
-@ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr)>()
-external ffi.Pointer<ImageHandle> pixer_load_from_memory(ffi.Pointer<ffi.Uint8> data, int len);
+@ffi.Native<
+  ffi.Pointer<ImageHandle> Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr)
+>()
+external ffi.Pointer<ImageHandle> pixer_load_from_memory(
+  ffi.Pointer<ffi.Uint8> data,
+  int len,
+);
 
 /// Load an image from memory with specific format
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(ffi.Pointer<ffi.Uint8>, ffi.UintPtr, ImageFormatEnum$1)
+  ffi.Pointer<ImageHandle> Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.UintPtr,
+    ImageFormatEnum$1,
+  )
 >()
 external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_format(
   ffi.Pointer<ffi.Uint8> data,
@@ -41,7 +52,10 @@ external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_format(
 
 /// Load an image from a file path with error code output
 @ffi.Native<
-  ffi.Pointer<ImageHandle> Function(ffi.Pointer<ffi.Char>, ffi.Pointer<ImageErrorCode$1>)
+  ffi.Pointer<ImageHandle> Function(
+    ffi.Pointer<ffi.Char>,
+    ffi.Pointer<ImageErrorCode$1>,
+  )
 >()
 external ffi.Pointer<ImageHandle> pixer_load_with_error(
   ffi.Pointer<ffi.Char> path,
@@ -78,9 +92,86 @@ external ffi.Pointer<ImageHandle> pixer_load_from_memory_with_format_and_error(
   ffi.Pointer<ImageErrorCode$1> out_error,
 );
 
+/// Loads an image from memory, decoding at a reduced resolution suited to
+/// `(target_width, target_height)` when the source is a JPEG or PNG.
+///
+/// This exists for thumbnail generation: a JPEG's DCT structure and a PNG's
+/// scanline structure both let the decoder avoid reconstructing full
+/// resolution when the caller only needs a much smaller output, cutting
+/// decode memory and CPU roughly in proportion to the scale chosen. Any
+/// other format, or a decode-time-downscale failure, falls back
+/// transparently to the regular full decode.
+@ffi.Native<
+  ffi.Pointer<ImageHandle> Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.UintPtr,
+    ffi.Uint32,
+    ffi.Uint32,
+    ffi.Pointer<ImageErrorCode$1>,
+  )
+>()
+external ffi.Pointer<ImageHandle> pixer_load_scaled_from_memory_with_error(
+  ffi.Pointer<ffi.Uint8> data,
+  int len,
+  int target_width,
+  int target_height,
+  ffi.Pointer<ImageErrorCode$1> out_error,
+);
+
+/// File-path counterpart of [`pixer_load_scaled_from_memory_with_error`].
+@ffi.Native<
+  ffi.Pointer<ImageHandle> Function(
+    ffi.Pointer<ffi.Char>,
+    ffi.Uint32,
+    ffi.Uint32,
+    ffi.Pointer<ImageErrorCode$1>,
+  )
+>()
+external ffi.Pointer<ImageHandle> pixer_load_scaled_from_file_with_error(
+  ffi.Pointer<ffi.Char> path,
+  int target_width,
+  int target_height,
+  ffi.Pointer<ImageErrorCode$1> out_error,
+);
+
+/// Read image metadata from a file path without decoding pixel data
+@ffi.Native<
+  ImageErrorCode$1 Function(
+    ffi.Pointer<ffi.Char>,
+    ffi.Pointer<ImageMetadata>,
+    ffi.Pointer<ImageErrorCode$1>,
+  )
+>()
+external int pixer_read_metadata_from_file_with_error(
+  ffi.Pointer<ffi.Char> path,
+  ffi.Pointer<ImageMetadata> out_metadata,
+  ffi.Pointer<ImageErrorCode$1> out_error,
+);
+
+/// Read image metadata from memory without decoding pixel data
+@ffi.Native<
+  ImageErrorCode$1 Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.UintPtr,
+    ffi.Pointer<ImageMetadata>,
+    ffi.Pointer<ImageErrorCode$1>,
+  )
+>()
+external int pixer_read_metadata_from_memory_with_error(
+  ffi.Pointer<ffi.Uint8> data,
+  int len,
+  ffi.Pointer<ImageMetadata> out_metadata,
+  ffi.Pointer<ImageErrorCode$1> out_error,
+);
+
 /// Save an image to a file path
-@ffi.Native<ImageErrorCode$1 Function(ffi.Pointer<ImageHandle>, ffi.Pointer<ffi.Char>)>()
-external int pixer_save(ffi.Pointer<ImageHandle> handle, ffi.Pointer<ffi.Char> path);
+@ffi.Native<
+  ImageErrorCode$1 Function(ffi.Pointer<ImageHandle>, ffi.Pointer<ffi.Char>)
+>()
+external int pixer_save(
+  ffi.Pointer<ImageHandle> handle,
+  ffi.Pointer<ffi.Char> path,
+);
 
 /// Write an image to a buffer in the specified format
 /// Caller must free the buffer using pixer_free_buffer
@@ -121,10 +212,42 @@ external int pixer_write_to_with_quality(
   ffi.Pointer<ffi.UintPtr> out_len,
 );
 
+/// Write an image to a *lossy* WebP buffer with the specified quality, via
+/// libwebp's own lossy encoder (`WebPEncodeRGB`/`WebPEncodeRGBA`).
+///
+/// This is additive to, and does not change, `pixer_write_to`'s existing
+/// lossless WebP behavior (`image`'s own `image-webp` codec has no lossy
+/// encoder at all, which is why this goes through `libwebp-sys` directly
+/// instead). The source image's alpha channel, if any, is preserved via
+/// `WebPEncodeRGBA`; opaque images use `WebPEncodeRGB`.
+///
+/// `quality` must be in `0..=100` (matching libwebp's own `quality_factor`
+/// convention: `0` is smallest/lowest quality, `100` is largest/highest
+/// quality - unlike `pixer_write_to_with_quality`'s JPEG quality, `0` is a
+/// valid input here, not just `1..=100`). Caller must free the buffer using
+/// `pixer_free_buffer`.
+@ffi.Native<
+  ImageErrorCode$1 Function(
+    ffi.Pointer<ImageHandle>,
+    ffi.Uint8,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.UintPtr>,
+  )
+>()
+external int pixer_write_to_webp_lossy(
+  ffi.Pointer<ImageHandle> handle,
+  int quality,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> out_data,
+  ffi.Pointer<ffi.UintPtr> out_len,
+);
+
 /// Get image metadata
-@ffi.Native<ImageErrorCode$1 Function(ffi.Pointer<ImageHandle>, ffi.Pointer<ImageMetadata>)>(
-  isLeaf: true,
-)
+@ffi.Native<
+  ImageErrorCode$1 Function(
+    ffi.Pointer<ImageHandle>,
+    ffi.Pointer<ImageMetadata>,
+  )
+>(isLeaf: true)
 external int pixer_get_metadata(
   ffi.Pointer<ImageHandle> handle,
   ffi.Pointer<ImageMetadata> out_metadata,
@@ -189,15 +312,21 @@ external ffi.Pointer<ImageHandle> pixer_crop_imm(
 
 /// Rotate an image 90 degrees clockwise
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
-external ffi.Pointer<ImageHandle> pixer_rotate90(ffi.Pointer<ImageHandle> handle);
+external ffi.Pointer<ImageHandle> pixer_rotate90(
+  ffi.Pointer<ImageHandle> handle,
+);
 
 /// Rotate an image 180 degrees
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
-external ffi.Pointer<ImageHandle> pixer_rotate180(ffi.Pointer<ImageHandle> handle);
+external ffi.Pointer<ImageHandle> pixer_rotate180(
+  ffi.Pointer<ImageHandle> handle,
+);
 
 /// Rotate an image 270 degrees clockwise
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
-external ffi.Pointer<ImageHandle> pixer_rotate270(ffi.Pointer<ImageHandle> handle);
+external ffi.Pointer<ImageHandle> pixer_rotate270(
+  ffi.Pointer<ImageHandle> handle,
+);
 
 /// Flip an image horizontally
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
@@ -210,67 +339,90 @@ external ffi.Pointer<ImageHandle> pixer_flipv(ffi.Pointer<ImageHandle> handle);
 /// Apply a Gaussian blur with the given standard deviation in pixels.
 ///
 /// `sigma` must be finite and `>= 0`. `sigma == 0` returns an unchanged copy.
-@ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Float)>()
-external ffi.Pointer<ImageHandle> pixer_blur(ffi.Pointer<ImageHandle> handle, double sigma);
+@ffi.Native<
+  ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Float)
+>()
+external ffi.Pointer<ImageHandle> pixer_blur(
+  ffi.Pointer<ImageHandle> handle,
+  double sigma,
+);
 
 /// Add `value` to every channel of every pixel.
 ///
 /// Values are clamped per-channel to `[0, 255]`. Negative values darken,
 /// positive values brighten. The practical range is roughly `-255..=255`;
 /// larger magnitudes simply saturate.
-@ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Int32)>()
-external ffi.Pointer<ImageHandle> pixer_brighten(ffi.Pointer<ImageHandle> handle, int value);
+@ffi.Native<
+  ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Int32)
+>()
+external ffi.Pointer<ImageHandle> pixer_brighten(
+  ffi.Pointer<ImageHandle> handle,
+  int value,
+);
 
 /// Adjust contrast around the midpoint.
 ///
 /// `c == 0.0` leaves the image unchanged. Positive values increase contrast,
 /// negative values decrease it. `c` must be finite.
-@ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Float)>()
-external ffi.Pointer<ImageHandle> pixer_adjust_contrast(ffi.Pointer<ImageHandle> handle, double c);
+@ffi.Native<
+  ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>, ffi.Float)
+>()
+external ffi.Pointer<ImageHandle> pixer_adjust_contrast(
+  ffi.Pointer<ImageHandle> handle,
+  double c,
+);
 
 /// Convert to grayscale
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
-external ffi.Pointer<ImageHandle> pixer_grayscale(ffi.Pointer<ImageHandle> handle);
+external ffi.Pointer<ImageHandle> pixer_grayscale(
+  ffi.Pointer<ImageHandle> handle,
+);
 
 /// Invert colors (returns new image)
 @ffi.Native<ffi.Pointer<ImageHandle> Function(ffi.Pointer<ImageHandle>)>()
 external ffi.Pointer<ImageHandle> pixer_invert(ffi.Pointer<ImageHandle> handle);
 
-/// Sampling filter used when resizing.
-///
-/// Quality and cost roughly increase from top to bottom; `Lanczos3` is the
-/// default and produces the sharpest results, `Nearest` is the fastest.
-enum FilterTypeEnum {
-  /// Nearest-neighbour. Fastest, blocky output. Good for pixel art.
-  Nearest(0),
+/// Image container format used for both decoding and encoding.
+enum ImageFormatEnum {
+  /// Portable Network Graphics — lossless, alpha supported.
+  Png(0),
 
-  /// Linear (a.k.a. bilinear). Cheap, slightly blurry.
-  Triangle(1),
+  /// JPEG — lossy, no alpha. Quality is configurable on encode.
+  Jpeg(1),
 
-  /// Catmull-Rom cubic. Sharper than `Triangle`, can ring on edges.
-  CatmullRom(2),
+  /// Graphics Interchange Format — palette-based, supports animation
+  /// (single-frame only via this API).
+  Gif(2),
 
-  /// Gaussian. Soft output, useful for downscaling without aliasing.
-  Gaussian(3),
+  /// WebP — lossy or lossless, alpha supported.
+  WebP(3),
 
-  /// Lanczos with `a = 3`. Highest quality, slowest. Default.
-  Lanczos3(4);
+  /// Windows Bitmap — uncompressed, large files.
+  Bmp(4),
+
+  /// Windows Icon — multi-resolution container.
+  Ico(5),
+
+  /// Tagged Image File Format — typically lossless.
+  Tiff(6);
 
   final int value;
-  const FilterTypeEnum(this.value);
+  const ImageFormatEnum(this.value);
 
-  static FilterTypeEnum fromValue(int value) => switch (value) {
-    0 => Nearest,
-    1 => Triangle,
-    2 => CatmullRom,
-    3 => Gaussian,
-    4 => Lanczos3,
-    _ => throw ArgumentError('Unknown value for FilterTypeEnum: $value'),
+  static ImageFormatEnum fromValue(int value) => switch (value) {
+    0 => Png,
+    1 => Jpeg,
+    2 => Gif,
+    3 => WebP,
+    4 => Bmp,
+    5 => Ico,
+    6 => Tiff,
+    _ => throw ArgumentError('Unknown value for ImageFormatEnum: $value'),
   };
 }
 
-typedef FilterTypeEnum$1 = ffi.Uint32;
-typedef DartFilterTypeEnum = int;
+typedef ImageFormatEnum$1 = ffi.Uint32;
+typedef DartImageFormatEnum = int;
 
 /// Error code returned through `out_error` pointers and as the result of
 /// operations that don't return a handle.
@@ -326,47 +478,41 @@ enum ImageErrorCode {
 typedef ImageErrorCode$1 = ffi.Uint32;
 typedef DartImageErrorCode = int;
 
-/// Image container format used for both decoding and encoding.
-enum ImageFormatEnum {
-  /// Portable Network Graphics — lossless, alpha supported.
-  Png(0),
+/// Sampling filter used when resizing.
+///
+/// Quality and cost roughly increase from top to bottom; `Lanczos3` is the
+/// default and produces the sharpest results, `Nearest` is the fastest.
+enum FilterTypeEnum {
+  /// Nearest-neighbour. Fastest, blocky output. Good for pixel art.
+  Nearest(0),
 
-  /// JPEG — lossy, no alpha. Quality is configurable on encode.
-  Jpeg(1),
+  /// Linear (a.k.a. bilinear). Cheap, slightly blurry.
+  Triangle(1),
 
-  /// Graphics Interchange Format — palette-based, supports animation
-  /// (single-frame only via this API).
-  Gif(2),
+  /// Catmull-Rom cubic. Sharper than `Triangle`, can ring on edges.
+  CatmullRom(2),
 
-  /// WebP — lossy or lossless, alpha supported.
-  WebP(3),
+  /// Gaussian. Soft output, useful for downscaling without aliasing.
+  Gaussian(3),
 
-  /// Windows Bitmap — uncompressed, large files.
-  Bmp(4),
-
-  /// Windows Icon — multi-resolution container.
-  Ico(5),
-
-  /// Tagged Image File Format — typically lossless.
-  Tiff(6);
+  /// Lanczos with `a = 3`. Highest quality, slowest. Default.
+  Lanczos3(4);
 
   final int value;
-  const ImageFormatEnum(this.value);
+  const FilterTypeEnum(this.value);
 
-  static ImageFormatEnum fromValue(int value) => switch (value) {
-    0 => Png,
-    1 => Jpeg,
-    2 => Gif,
-    3 => WebP,
-    4 => Bmp,
-    5 => Ico,
-    6 => Tiff,
-    _ => throw ArgumentError('Unknown value for ImageFormatEnum: $value'),
+  static FilterTypeEnum fromValue(int value) => switch (value) {
+    0 => Nearest,
+    1 => Triangle,
+    2 => CatmullRom,
+    3 => Gaussian,
+    4 => Lanczos3,
+    _ => throw ArgumentError('Unknown value for FilterTypeEnum: $value'),
   };
 }
 
-typedef ImageFormatEnum$1 = ffi.Uint32;
-typedef DartImageFormatEnum = int;
+typedef FilterTypeEnum$1 = ffi.Uint32;
+typedef DartFilterTypeEnum = int;
 
 final class ImageHandle extends ffi.Opaque {}
 
@@ -379,4 +525,10 @@ final class ImageMetadata extends ffi.Struct {
 
   @ffi.Uint8()
   external int color_type;
+
+  /// Matches [`ImageFormatEnum`]'s discriminants; `255` means the format
+  /// is unknown or not applicable (e.g. metadata read from an already-
+  /// decoded [`ImageHandle`], which no longer carries its source format).
+  @ffi.Uint8()
+  external int format;
 }

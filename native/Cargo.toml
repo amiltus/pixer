@@ -2,13 +2,35 @@
 name = "pixer"
 version = "0.1.0"
 edition = "2024"
+autobins = false
 
 [lib]
-crate-type = ["staticlib", "cdylib"]
+# "rlib" is only so decode_bench (a bin target in this same package,
+# gated behind the `bench` feature) can link against ffi::try_decode_scaled
+# directly for benchmarking the real code path - Dart only ever loads the
+# staticlib/cdylib output, never this rlib.
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "decode_bench"
+path = "src/bin/decode_bench.rs"
+required-features = ["bench"]
 
 [dependencies]
 image = "0.25.5"
 libc = "0.2.177"
+turbojpeg = "1.4.0"
+png = "0.18.0"
+# Phase 5 graduated: scaled decode-time WebP is now a real ffi.rs dispatch
+# entry (try_decode_scaled_webp), so this is a normal dependency of the real
+# staticlib/cdylib, not just the `bench` decode_bench tool. Vendors its C
+# source via the `cc` crate directly (no cmake/nasm), confirmed to cross-
+# compile clean for all four Android ABIs, iOS device+sim, and macOS via a
+# local NDK/Xcode spike before this was flipped on.
+libwebp-sys = "0.14.4"
+
+[features]
+bench = []
 
 [profile.release]
 opt-level = 3

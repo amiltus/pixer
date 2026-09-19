@@ -37,6 +37,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # turbojpeg-sys builds libjpeg-turbo from source with -DREQUIRE_SIMD=ON
+      # (the `require-simd` feature is on by default). x86/x86_64 SIMD needs
+      # NASM to assemble; without it cmake fails hard on every x86_64 leg
+      # (Android x64, Linux x64, macOS x64, iOS sim x64, Windows x64) - none
+      # of the GitHub-hosted runner images guarantee NASM is preinstalled.
+      # ARM targets don't need this (NEON is compiled straight from C).
+      - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b
+
       - uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410
         with:
           ndk-version: r27
