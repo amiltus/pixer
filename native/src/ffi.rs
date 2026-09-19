@@ -232,6 +232,76 @@ fn write_to_jpeg_with_quality(img: &DynamicImage, quality: u8) -> Result<Vec<u8>
     Ok(buffer)
 }
 
+/// Encodes `img` as *lossy* WebP via libwebp's own one-shot encoder
+/// (`WebPEncodeRGB`/`WebPEncodeRGBA`), picking RGBA when the source has an
+/// alpha channel and RGB otherwise.
+///
+/// This is a different code path from `pixer_write_to(..., WebP, ...)`,
+/// which goes through the `image` crate's built-in `image-webp` codec and
+/// only supports lossless encoding - `image-webp` has no lossy encoder at
+/// all. `quality` is libwebp's own `quality_factor`, `0.0..=100.0`.
+///
+/// The buffer `WebPEncodeRGB`/`WebPEncodeRGBA` returns is allocated by
+/// libwebp itself (not Rust's allocator), so it is copied into an owned
+/// `Vec<u8>` and then freed via `WebPFree` before returning - the
+/// libwebp-owned pointer itself must never cross the FFI boundary to Dart.
+fn write_to_webp_lossy(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, ImageErrorCode> {
+    let quality_factor = quality as f32;
+
+    let mut out: *mut u8 = std::ptr::null_mut();
+    let len = if img.color().has_alpha() {
+        let buf = img.to_rgba8();
+        let stride = buf.width() as i32 * 4;
+        unsafe {
+            libwebp_sys::WebPEncodeRGBA(
+                buf.as_raw().as_ptr(),
+                buf.width() as i32,
+                buf.height() as i32,
+                stride,
+                quality_factor,
+                &mut out,
+            )
+        }
+    } else {
+        let buf = img.to_rgb8();
+        let stride = buf.width() as i32 * 3;
+        unsafe {
+            libwebp_sys::WebPEncodeRGB(
+                buf.as_raw().as_ptr(),
+                buf.width() as i32,
+                buf.height() as i32,
+                stride,
+                quality_factor,
+                &mut out,
+            )
+        }
+    };
+
+    if out.is_null() || len == 0 {
+        // Guard against a partial success (non-null `out` with `len == 0`):
+        // not something libwebp's documented contract produces today (it
+        // sets `*output = NULL` and returns 0 together on failure), but if
+        // it ever did, failing to free `out` here would leak the
+        // libwebp-owned allocation.
+        if !out.is_null() {
+            unsafe {
+                libwebp_sys::WebPFree(out as *mut _);
+            }
+        }
+        return Err(ImageErrorCode::EncodingError);
+    }
+
+    // SAFETY: `out` was just returned by WebPEncodeRGB/RGBA together with
+    // `len`, its valid byte length. libwebp owns this allocation - copy it
+    // into owned Rust memory, then free the original with `WebPFree` (never
+    // Rust's allocator, and never returned to the caller directly).
+    let bytes = unsafe { slice::from_raw_parts(out, len) }.to_vec();
+    unsafe {
+        libwebp_sys::WebPFree(out as *mut _);
+    }
+    Ok(bytes)
+}
+
 // ============================================================================
 // Memory Management
 // ============================================================================
@@ -916,6 +986,45 @@ pub extern "C" fn pixer_write_to_with_quality(
     .unwrap_or(ImageErrorCode::InvalidPointer)
 }
 
+/// Write an image to a *lossy* WebP buffer with the specified quality, via
+/// libwebp's own lossy encoder (`WebPEncodeRGB`/`WebPEncodeRGBA`).
+///
+/// This is additive to, and does not change, `pixer_write_to`'s existing
+/// lossless WebP behavior (`image`'s own `image-webp` codec has no lossy
+/// encoder at all, which is why this goes through `libwebp-sys` directly
+/// instead). The source image's alpha channel, if any, is preserved via
+/// `WebPEncodeRGBA`; opaque images use `WebPEncodeRGB`.
+///
+/// `quality` must be in `0..=100` (matching libwebp's own `quality_factor`
+/// convention: `0` is smallest/lowest quality, `100` is largest/highest
+/// quality - unlike `pixer_write_to_with_quality`'s JPEG quality, `0` is a
+/// valid input here, not just `1..=100`). Caller must free the buffer using
+/// `pixer_free_buffer`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pixer_write_to_webp_lossy(
+    handle: *const ImageHandle,
+    quality: u8,
+    out_data: *mut *mut u8,
+    out_len: *mut usize,
+) -> ImageErrorCode {
+    if out_data.is_null() || out_len.is_null() {
+        return ImageErrorCode::InvalidPointer;
+    }
+
+    if quality > 100 {
+        return ImageErrorCode::InvalidParameter;
+    }
+
+    with_image(handle, |img| match write_to_webp_lossy(img, quality) {
+        Ok(buffer) => {
+            buffer_output(buffer, out_data, out_len);
+            ImageErrorCode::Success
+        }
+        Err(code) => code,
+    })
+    .unwrap_or(ImageErrorCode::InvalidPointer)
+}
+
 // ============================================================================
 // Image Information
 // ============================================================================
@@ -1401,5 +1510,97 @@ mod tests {
         let bytes = encode_test_webp_rgb(400, 200);
         let img = try_decode_scaled(&bytes, 50, 25).expect("dispatch should route WebP bytes to the scaled WebP path");
         assert!(img.width() <= 400 && img.height() <= 200);
+    }
+
+    /// Builds a synthetic RGB `DynamicImage` with enough spatial variation
+    /// (a smooth gradient plus per-pixel noise) that lossy compression has
+    /// something real to gain over lossless - a flat-color image compresses
+    /// to almost nothing either way and wouldn't exercise the size
+    /// difference this test checks for.
+    fn synthetic_photo_like_image(width: u32, height: u32) -> DynamicImage {
+        let mut pixels = vec![0u8; (width * height * 3) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 3) as usize;
+                let noise = ((x.wrapping_mul(2654435761).wrapping_add(y.wrapping_mul(40503))) % 37) as u8;
+                pixels[idx] = ((x * 255 / width.max(1)) as u8).wrapping_add(noise);
+                pixels[idx + 1] = ((y * 255 / height.max(1)) as u8).wrapping_add(noise);
+                pixels[idx + 2] = (((x + y) * 255 / (width + height).max(1)) as u8).wrapping_add(noise);
+            }
+        }
+        DynamicImage::ImageRgb8(
+            image::RgbImage::from_raw(width, height, pixels)
+                .expect("width/height/pixels length must agree"),
+        )
+    }
+
+    #[test]
+    fn webp_lossy_encode_roundtrips_and_beats_lossless_size_at_quality_80() {
+        let img = synthetic_photo_like_image(256, 256);
+
+        // Lossless, via the existing shipped `pixer_write_to` code path
+        // (the `image` crate's own built-in WebP encoder, which has no lossy
+        // mode at all).
+        let mut lossless_bytes = Vec::new();
+        img.write_to(&mut Cursor::new(&mut lossless_bytes), ImageFormat::WebP)
+            .expect("lossless WebP encode via the image crate should succeed");
+
+        // Lossy, via the new libwebp-backed path.
+        let lossy_bytes = write_to_webp_lossy(&img, 80)
+            .unwrap_or_else(|_| panic!("lossy WebP encode via libwebp should succeed"));
+
+        assert!(!lossy_bytes.is_empty());
+        assert!(
+            lossy_bytes.len() < lossless_bytes.len(),
+            "expected lossy WebP ({} bytes) to be meaningfully smaller than lossless WebP \
+             ({} bytes) for a photo-like source at quality=80",
+            lossy_bytes.len(),
+            lossless_bytes.len(),
+        );
+
+        // Round-trip: the encoded lossy bytes must decode back correctly,
+        // via the same general-purpose decode path already shipped
+        // (`image::load_from_memory_with_format`, which `pixer_load*`
+        // ultimately calls into) - confirming this is real, valid WebP and
+        // not just an opaque blob.
+        let decoded = image::load_from_memory_with_format(&lossy_bytes, ImageFormat::WebP)
+            .expect("lossy WebP output must decode correctly");
+        assert_eq!(decoded.width(), 256);
+        assert_eq!(decoded.height(), 256);
+        assert_eq!(decoded.color(), image::ColorType::Rgb8);
+    }
+
+    #[test]
+    fn webp_lossy_encode_preserves_alpha_via_rgba_path() {
+        let width = 64u32;
+        let height = 64u32;
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        for i in 0..(width * height) as usize {
+            pixels[i * 4] = (i % 256) as u8;
+            pixels[i * 4 + 1] = ((i * 3) % 256) as u8;
+            pixels[i * 4 + 2] = ((i * 7) % 256) as u8;
+            pixels[i * 4 + 3] = if i % 2 == 0 { 255 } else { 128 };
+        }
+        let img = DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(width, height, pixels).unwrap(),
+        );
+
+        let lossy_bytes = write_to_webp_lossy(&img, 80)
+            .unwrap_or_else(|_| panic!("RGBA lossy encode should succeed"));
+        let decoded = image::load_from_memory_with_format(&lossy_bytes, ImageFormat::WebP)
+            .expect("RGBA lossy WebP output must decode correctly");
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        assert_eq!(decoded.color(), image::ColorType::Rgba8);
+    }
+
+    #[test]
+    fn webp_lossy_encode_rejects_quality_above_100_via_ffi_entrypoint() {
+        let img = synthetic_photo_like_image(8, 8);
+        let handle = into_handle(img);
+        let mut out_data: *mut u8 = std::ptr::null_mut();
+        let mut out_len: usize = 0;
+        let result = pixer_write_to_webp_lossy(handle, 101, &mut out_data, &mut out_len);
+        assert!(matches!(result, ImageErrorCode::InvalidParameter));
+        pixer_free(handle);
     }
 }
