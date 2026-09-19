@@ -212,6 +212,35 @@ external int pixer_write_to_with_quality(
   ffi.Pointer<ffi.UintPtr> out_len,
 );
 
+/// Write an image to a *lossy* WebP buffer with the specified quality, via
+/// libwebp's own lossy encoder (`WebPEncodeRGB`/`WebPEncodeRGBA`).
+///
+/// This is additive to, and does not change, `pixer_write_to`'s existing
+/// lossless WebP behavior (`image`'s own `image-webp` codec has no lossy
+/// encoder at all, which is why this goes through `libwebp-sys` directly
+/// instead). The source image's alpha channel, if any, is preserved via
+/// `WebPEncodeRGBA`; opaque images use `WebPEncodeRGB`.
+///
+/// `quality` must be in `0..=100` (matching libwebp's own `quality_factor`
+/// convention: `0` is smallest/lowest quality, `100` is largest/highest
+/// quality - unlike `pixer_write_to_with_quality`'s JPEG quality, `0` is a
+/// valid input here, not just `1..=100`). Caller must free the buffer using
+/// `pixer_free_buffer`.
+@ffi.Native<
+  ImageErrorCode$1 Function(
+    ffi.Pointer<ImageHandle>,
+    ffi.Uint8,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.UintPtr>,
+  )
+>()
+external int pixer_write_to_webp_lossy(
+  ffi.Pointer<ImageHandle> handle,
+  int quality,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> out_data,
+  ffi.Pointer<ffi.UintPtr> out_len,
+);
+
 /// Get image metadata
 @ffi.Native<
   ImageErrorCode$1 Function(

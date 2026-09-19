@@ -291,6 +291,27 @@ ImageErrorCode pixer_write_to_with_quality(const struct ImageHandle *handle,
                                            uintptr_t *out_len);
 
 /**
+ * Write an image to a *lossy* WebP buffer with the specified quality, via
+ * libwebp's own lossy encoder (`WebPEncodeRGB`/`WebPEncodeRGBA`).
+ *
+ * This is additive to, and does not change, `pixer_write_to`'s existing
+ * lossless WebP behavior (`image`'s own `image-webp` codec has no lossy
+ * encoder at all, which is why this goes through `libwebp-sys` directly
+ * instead). The source image's alpha channel, if any, is preserved via
+ * `WebPEncodeRGBA`; opaque images use `WebPEncodeRGB`.
+ *
+ * `quality` must be in `0..=100` (matching libwebp's own `quality_factor`
+ * convention: `0` is smallest/lowest quality, `100` is largest/highest
+ * quality - unlike `pixer_write_to_with_quality`'s JPEG quality, `0` is a
+ * valid input here, not just `1..=100`). Caller must free the buffer using
+ * `pixer_free_buffer`.
+ */
+ImageErrorCode pixer_write_to_webp_lossy(const struct ImageHandle *handle,
+                                         uint8_t quality,
+                                         uint8_t **out_data,
+                                         uintptr_t *out_len);
+
+/**
  * Get image metadata
  */
 ImageErrorCode pixer_get_metadata(const struct ImageHandle *handle,

@@ -117,12 +117,46 @@ final class PixerGifEncoder extends PixerEncoder {
   ImageFormatEnum get format => ImageFormatEnum.Gif;
 }
 
-/// Encodes an image as WebP.
+/// Encodes an image as WebP, losslessly.
+///
+/// The `image` crate's built-in WebP codec (used here via `pixer_write_to`)
+/// has no lossy encode mode at all — for lossy WebP, use
+/// [PixerWebPLossyEncoder] instead.
 final class PixerWebPEncoder extends PixerEncoder {
   const PixerWebPEncoder();
 
   @override
   ImageFormatEnum get format => ImageFormatEnum.WebP;
+}
+
+/// Encodes an image as *lossy* WebP, via libwebp's own lossy encoder.
+///
+/// [quality] must be between 0 and 100, matching libwebp's own
+/// `quality_factor` convention (0 = smallest/lowest quality, 100 =
+/// largest/highest quality — unlike [PixerJpegEncoder], `0` is a valid
+/// value here).
+final class PixerWebPLossyEncoder extends PixerEncoder {
+  PixerWebPLossyEncoder({this.quality = 80}) {
+    if (quality < 0 || quality > 100) {
+      throw RangeError.range(quality, 0, 100, 'quality');
+    }
+  }
+
+  /// Lossy WebP encoding quality, from 0 (lowest) to 100 (highest).
+  final int quality;
+
+  @override
+  ImageFormatEnum get format => ImageFormatEnum.WebP;
+
+  @override
+  Uint8List encode(ffi.Pointer<ImageHandle> handle) {
+    return _encodeWith(
+      write: (outDataPtr, outLenPtr) {
+        return pixer_write_to_webp_lossy(handle, quality, outDataPtr, outLenPtr);
+      },
+      context: 'format: ${format.name} (lossy), quality: $quality',
+    );
+  }
 }
 
 /// Encodes an image as BMP.
